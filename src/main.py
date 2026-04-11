@@ -13,6 +13,7 @@ from recommender import load_songs, recommend_songs
 
 
 def main() -> None:
+    """Run the music recommender simulation and display top recommendations."""
     songs = load_songs("data/songs.csv") 
 
     user_prefs = {
@@ -29,13 +30,20 @@ def main() -> None:
 
     recommendations = recommend_songs(user_prefs, songs, k=5)
 
-    print("\nTop recommendations:\n")
+    # ANSI color codes
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    GRAY = "\033[90m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+    print(f"\n{CYAN}{BOLD}Top recommendations:{RESET}\n")
     for rec in recommendations:
         # You decide the structure of each returned item.
         # A common pattern is: (song, score, explanation)
         song, score, explanation = rec
-        print(f"{song['title']} - Score: {score:.2f}")
-        print(f"Because: {explanation}")
+        print(f"{CYAN}{BOLD}{song['title']}{RESET} - {GREEN}Score: {score:.2f}{RESET}")
+        print(f"{GRAY}Because: {explanation}{RESET}")
         print()
 
 

@@ -1,5 +1,9 @@
 # 🎵 Music Recommender Simulation
 
+![User Preference](user_preference.png)
+
+![Recommendations](recommendations.png)
+
 ## Project Summary
 
 In this project you will build and explain a small music recommender system.

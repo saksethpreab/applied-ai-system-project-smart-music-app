@@ -134,6 +134,7 @@ def _score_song_dict(song: dict, user: dict, bpm_min: float, bpm_range: float) -
 
 
 def _explain_dict(song: dict, user: dict, score: float) -> str:
+    """Generate explanation for song recommendation (functional interface)."""
     genre_cur_m = _family_match(song["genre"], user["current_genre"], GENRE_FAMILIES)
     mood_cur_m  = _family_match(song["mood"],  user["current_mood"],  MOOD_FAMILIES)
     genre_label = "exact" if genre_cur_m == 1.0 else ("close" if genre_cur_m == 0.5 else "different")
@@ -177,12 +178,14 @@ class Recommender:
     Required by tests/test_recommender.py
     """
     def __init__(self, songs: List[Song]):
+        """Initialize recommender with songs and compute BPM range."""
         self.songs = songs
         self._bpm_min   = min(s.tempo_bpm for s in songs)
         self._bpm_max   = max(s.tempo_bpm for s in songs)
         self._bpm_range = self._bpm_max - self._bpm_min
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
+        """Return top k songs recommended for the user."""
         scored = sorted(
             self.songs,
             key=lambda s: _score_song(s, user, self._bpm_min, self._bpm_range),
@@ -191,6 +194,7 @@ class Recommender:
         return scored[:k]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
+        """Generate explanation for why a song is recommended."""
         score     = _score_song(song, user, self._bpm_min, self._bpm_range)
         genre_m   = _family_match(song.genre, user.current_genre, GENRE_FAMILIES)
         mood_m    = _family_match(song.mood,  user.current_mood,  MOOD_FAMILIES)
