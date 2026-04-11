@@ -96,10 +96,9 @@ Read and complete `model_card.md`:
 
 [**Model Card**](model_card.md)
 
-Write 1 to 2 paragraphs here about what you learned:
+Real-world recommendation systems like Spotify or YouTube learn their behavior from billions of user interactions — plays, skips, replays, and ratings. The model adjusts millions of internal parameters during training until it gets good at predicting what a user will engage with next. Because those parameters are learned rather than hand-written, no one can point to a single formula and explain exactly why a specific song was recommended. The behavior emerges from the data, not from explicit rules.
 
-- about how recommenders turn data into predictions
-- about where bias or unfairness could show up in systems like this
+Our system is explainable precisely because it works the opposite way. Every score comes from a hard-coded formula with fixed, human-readable weights: 40% from categorical match (genre and mood) and 60% from numeric feature similarity (energy, valence, danceability, acousticness). Every contribution to a final score can be traced and calculated by hand. A variety re-ranking step then applies explicit penalties for consecutive genre or mood repeats. Nothing is learned or hidden. This makes our system fully transparent, at the cost of personalization — it cannot improve with use, but any result can be fully audited and explained.
 
 
 ---
