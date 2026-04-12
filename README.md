@@ -6,67 +6,68 @@
 
 ## Project Summary
 
-In this project you will build and explain a small music recommender system.
-
-Your goal is to:
-
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
-
-Replace this paragraph with your own summary of what your version does.
+This system recommends up to 5 songs from a hand-crafted 35-song catalog by scoring each song against a user profile. Every score is the weighted sum of a categorical match (genre and mood, 40%) and a numeric feature similarity (energy, valence, danceability, acousticness, tempo, 60%). A genre gate caps how much numeric similarity a genre-foreign song can contribute, preventing a hip-hop track from outscoring a rock track for a rock user purely on energy. A greedy variety re-ranker then applies small penalties for consecutive same-genre or same-mood picks so the final list is diverse. The entire pipeline is hand-coded with fixed weights — nothing is learned from data — making every recommendation fully auditable by hand.
 
 ---
 
 ## How The System Works
 
-Explain your design in plain language.
+### Song features
 
-Some prompts to answer:
+Each `Song` carries two categorical labels and five numeric features:
 
-- What features does each `Song` use in your system
-  - For example: genre, mood, energy, tempo
-- What information does your `UserProfile` store
-- How does your `Recommender` compute a score for each song
-- How do you choose which songs to recommend
+| Field | Type | What it captures |
+|---|---|---|
+| `genre` | string | Broad musical category (e.g. pop, lofi, rock, hip-hop) |
+| `mood` | string | Emotional tone (e.g. happy, chill, intense, sad) |
+| `energy` | 0–1 float | Perceived intensity and activity level |
+| `valence` | 0–1 float | Musical positiveness / brightness |
+| `danceability` | 0–1 float | How suitable the track is for dancing |
+| `acousticness` | 0–1 float | Acoustic (1.0) vs. electronic (0.0) character |
+| `tempo_bpm` | float | Beats per minute (catalog range: 50–168 BPM) |
 
-You can include a simple diagram or bullet list if helpful.
+### UserProfile fields
 
----
+A `UserProfile` holds two layers of preference:
 
-## Getting Started
+- **Long-term taste** — `favorite_genre`, `favorite_mood` (stable, cross-session identity)
+- **Current session** — `current_genre`, `current_mood` (the genre/mood the user has been playing in this session)
+- **Numeric targets** — `target_energy`, `target_valence`, `target_danceability`, `target_acousticness`, `target_tempo`
 
-### Setup
+Long-term and session signals are blended 50/50 in the final categorical score so a single off-genre session does not override established taste.
 
-1. Create a virtual environment (optional but recommended):
+### Scoring formula
 
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate      # Mac or Linux
-   .venv\Scripts\activate         # Windows
-
-2. Install dependencies
-
-```bash
-pip install -r requirements.txt
+```
+final_score = 0.40 × categorical_score + 0.60 × numeric_score
 ```
 
-3. Run the app:
+**Categorical score** (genre + mood proximity):
 
-```bash
-python -m src.main
-```
+- Genre match and mood match are each computed against both long-term and session preference (50/50 blend).
+- Match values: exact match = 1.0, same genre/mood family = 0.5, no relation = 0.0.
+- Genre families group similar genres (e.g. rock/metal/punk share a family; lofi/ambient/synthwave/electronic share another). Mood families group similar moods (e.g. chill/relaxed/peaceful/dreamy/focused share a family).
+- `categorical_score = 0.33 × genre_match + 0.67 × mood_match`
 
-### Running Tests
+**Numeric score** (feature similarity):
 
-Run the starter tests with:
+Each feature similarity = `1 − |song_value − user_target|`. Tempo is first normalized to [0, 1] across the catalog range before comparison.
 
-```bash
-pytest
-```
+| Feature | Weight |
+|---|---|
+| Energy | 0.35 |
+| Valence | 0.25 |
+| Danceability | 0.25 |
+| Acousticness | 0.10 |
+| Tempo | 0.05 |
 
-You can add more tests in `tests/test_recommender.py`.
+A **genre gate** is applied to the numeric score before combining: songs with an exact genre match pass through at full credit (gate = 1.0), same-family songs are capped at 50% (gate = 0.5), and genre-foreign songs are capped at 25% (gate = 0.25). The 0.25 floor preserves some cross-genre discovery rather than excluding foreign-genre songs entirely.
+
+### Recommendation selection
+
+1. Every song in the 35-song catalog is scored against the user profile.
+2. A greedy **variety re-ranker** selects songs one at a time. Each time a song would repeat the previous pick's genre, it receives a −0.15 penalty; repeating the mood adds another −0.15. Effective scores are clamped to 0.0.
+3. The top 5 songs from the re-ranked list are returned with a plain-language explanation of why each was chosen.
 
 ---
 
@@ -79,7 +80,7 @@ You can add more tests in `tests/test_recommender.py`.
 ### Edge Cases and Surprising Results
 
 **Acoustic Intensity — exact match penalized to last place**
-Stone Runner has exact rock/intense genre and mood match but acousticness of 0.18 against a target of 0.92 (sim = 0.26). That mismatch pushed it to the bottom of the raw ranking. The variety re-ranker then applied an additional −0.20 penalty for repeated genre/mood, resulting in an effective score of 0.025 — the lowest of any recommendation shown. A perfect categorical match ended up ranked last because one numeric feature was far off.
+Storm Runner has exact rock/intense genre and mood match but acousticness of 0.18 against a target of 0.92 (sim = 0.26). That mismatch pushed it to the bottom of the raw ranking. The variety re-ranker then applied an additional −0.20 penalty for repeated genre/mood, resulting in an effective score of 0.025 — the lowest of any recommendation shown. A perfect categorical match ended up ranked last because one numeric feature was far off.
 
 **High-Energy Sadness — contradictory profile exposes formula limits**
 High energy + sad mood is an inherently conflicting signal. The system cannot reconcile them — it averages. Result: Punk Energy (rock/angry) surfaces for an electronic/sad user purely because energy similarity (0.98 vs 0.90 target) overrides both genre and mood mismatch. The formula has no concept of "this combination doesn't make sense."
@@ -215,133 +216,20 @@ Each fix addressed a root cause rather than a symptom. Energy dominance was caus
 
 ## Limitations and Risks
 
-Summarize some limitations of your recommender.
-
-Examples:
-
-- It only works on a tiny catalog
-- It does not understand lyrics or language
-- It might over favor one genre or mood
-
-You will go deeper on this in your model card.
+- **Tiny, static catalog.** 35 songs cannot represent musical diversity. Adding even one new song requires manually entering all numeric features — there is no ingestion pipeline.
+- **Catalog imbalance.** ~51% of the catalog is high-energy, so low-energy users have fewer viable matches. Rock and classical are also underrepresented (6 and 7 songs respectively), while the electronic and pop families have 9 and 8 songs each.
+- **No listening history or feedback loop.** The system cannot learn from plays, skips, or ratings. User profiles are defined up front and never updated. Real recommenders improve with every interaction; this one cannot.
+- **No lyrics, language, or audio content.** The system knows nothing about what a song is actually saying or how it sounds beyond five hand-estimated numeric features. Songs in a language the user doesn't speak score identically to those in their native language.
+- **Hand-coded genre and mood families.** Grouping lofi with ambient or angry with intense is a subjective editorial choice. A different taxonomy would produce different results, and the current one cannot capture nuance (e.g. "focus lofi" vs. "aesthetic lofi").
+- **Contradictory profiles cannot be reconciled.** A user with high energy and sad mood presents an inherent conflict. The formula averages the signals rather than recognizing the tension, which can surface emotionally mismatched results.
+- **Greedy variety re-ranker is not globally optimal.** Penalties are applied one pick at a time; a different ordering of the same songs might produce higher overall diversity with fewer penalties.
 
 ---
 
 ## Reflection
 
-Read and complete `model_card.md`:
-
-[**Model Card**](model_card.md)
+The [**Model Card**](model_card.md) documents this system's intended use, design decisions, strengths, limitations, and evaluation in detail.
 
 Real-world recommendation systems like Spotify or YouTube learn their behavior from billions of user interactions — plays, skips, replays, and ratings. The model adjusts millions of internal parameters during training until it gets good at predicting what a user will engage with next. Because those parameters are learned rather than hand-written, no one can point to a single formula and explain exactly why a specific song was recommended. The behavior emerges from the data, not from explicit rules.
 
 Our system is explainable precisely because it works the opposite way. Every score comes from a hard-coded formula with fixed, human-readable weights: 40% from categorical match (genre and mood) and 60% from numeric feature similarity (energy, valence, danceability, acousticness). Every contribution to a final score can be traced and calculated by hand. A variety re-ranking step then applies explicit penalties for consecutive genre or mood repeats. Nothing is learned or hidden. This makes our system fully transparent, at the cost of personalization — it cannot improve with use, but any result can be fully audited and explained.
-
-
----
-
-## 7. `model_card_template.md`
-
-Combines reflection and model card framing from the Module 3 guidance. :contentReference[oaicite:2]{index=2}  
-
-```markdown
-# 🎧 Model Card - Music Recommender Simulation
-
-## 1. Model Name
-
-Give your recommender a name, for example:
-
-> VibeFinder 1.0
-
----
-
-## 2. Intended Use
-
-- What is this system trying to do
-- Who is it for
-
-Example:
-
-> This model suggests 3 to 5 songs from a small catalog based on a user's preferred genre, mood, and energy level. It is for classroom exploration only, not for real users.
-
----
-
-## 3. How It Works (Short Explanation)
-
-Describe your scoring logic in plain language.
-
-- What features of each song does it consider
-- What information about the user does it use
-- How does it turn those into a number
-
-Try to avoid code in this section, treat it like an explanation to a non programmer.
-
----
-
-## 4. Data
-
-Describe your dataset.
-
-- How many songs are in `data/songs.csv`
-- Did you add or remove any songs
-- What kinds of genres or moods are represented
-- Whose taste does this data mostly reflect
-
----
-
-## 5. Strengths
-
-Where does your recommender work well
-
-You can think about:
-- Situations where the top results "felt right"
-- Particular user profiles it served well
-- Simplicity or transparency benefits
-
----
-
-## 6. Limitations and Bias
-
-Where does your recommender struggle
-
-Some prompts:
-- Does it ignore some genres or moods
-- Does it treat all users as if they have the same taste shape
-- Is it biased toward high energy or one genre by default
-- How could this be unfair if used in a real product
-
----
-
-## 7. Evaluation
-
-How did you check your system
-
-Examples:
-- You tried multiple user profiles and wrote down whether the results matched your expectations
-- You compared your simulation to what a real app like Spotify or YouTube tends to recommend
-- You wrote tests for your scoring logic
-
-You do not need a numeric metric, but if you used one, explain what it measures.
-
----
-
-## 8. Future Work
-
-If you had more time, how would you improve this recommender
-
-Examples:
-
-- Add support for multiple users and "group vibe" recommendations
-- Balance diversity of songs instead of always picking the closest match
-- Use more features, like tempo ranges or lyric themes
-
----
-
-## 9. Personal Reflection
-
-A few sentences about what you learned:
-
-- What surprised you about how your system behaved
-- How did building this change how you think about real music recommenders
-- Where do you think human judgment still matters, even if the model seems "smart"
-
