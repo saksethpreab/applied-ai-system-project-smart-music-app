@@ -4,20 +4,20 @@ from dataclasses import dataclass
 
 # ── Genre & Mood proximity families ──────────────────────────────────────────
 GENRE_FAMILIES = {
-    "indie":      {"indie", "indie pop", "folk", "ballad"},
+    "indie":      {"indie", "indie pop", "folk"},
     "electronic": {"electronic", "synthwave", "techno", "lofi", "ambient"},
     "rock":       {"rock", "metal", "punk"},
     "urban":      {"hip-hop", "r&b", "soul", "funk"},
-    "classical":  {"classical", "country", "blues", "gospel"},
-    "pop":        {"pop", "disco", "latin", "reggae"},
+    "classical":  {"classical", "country", "blues", "gospel", "jazz"},
+    "pop":        {"pop", "disco", "latin", "reggae", "ballad"},
 }
 
 MOOD_FAMILIES = {
     "melancholic": {"sad", "melancholic", "moody", "introspective"},
-    "calm":        {"chill", "relaxed", "peaceful", "dreamy"},
-    "energetic":   {"energetic", "intense", "angry"},
+    "calm":        {"chill", "relaxed", "peaceful", "dreamy", "focused"},
+    "energetic":   {"energetic"},
+    "intense":     {"intense", "angry"},
     "positive":    {"happy", "joyful", "romantic"},
-    "focused":     {"focused"},
 }
 
 # Top-level score weights
@@ -25,15 +25,30 @@ W_CAT = 0.40
 W_NUM = 0.60
 
 # Categorical: long-term vs session blend
-W_LONG_TERM = 0.30
-W_SESSION   = 0.70
+W_LONG_TERM = 0.50
+W_SESSION   = 0.50
 
 # Numeric feature weights (must sum to 1.0)
-W_ENERGY      = 0.30
+W_ENERGY      = 0.35
 W_VALENCE     = 0.25
 W_DANCE       = 0.25
 W_ACOUSTICNESS = 0.10
-W_TEMPO       = 0.10
+W_TEMPO       = 0.05
+
+# Categorical sub-weights for genre vs mood (must sum to 1.0)
+# Genre halved relative to mood: was 0.50/0.50, now 0.33/0.67
+W_GENRE_CAT = 0.33
+W_MOOD_CAT  = 0.67
+
+# Fixed BPM scale for stable tempo normalization regardless of catalog size
+BPM_MIN   = 60.0
+BPM_MAX   = 200.0
+BPM_RANGE = BPM_MAX - BPM_MIN  # 140.0
+
+# Minimum genre-gate multiplier applied to numeric score.
+# Keeps genre-foreign songs eligible (cross-genre discovery) but caps
+# their numeric contribution so exact-genre matches always win on genre.
+GENRE_FLOOR = 0.25
 
 
 def _family_match(a: str, b: str, families: dict) -> float:
@@ -81,16 +96,16 @@ class UserProfile:
     target_tempo:        float  # raw BPM — normalized at score time using catalog range
 
 
-def _score_song(song: Song, user: UserProfile, bpm_min: float, bpm_range: float) -> float:
+def _score_song(song: Song, user: UserProfile) -> float:
     """Score a Song dataclass against a UserProfile."""
     genre_match = (W_LONG_TERM * _family_match(song.genre, user.favorite_genre, GENRE_FAMILIES)
                  + W_SESSION   * _family_match(song.genre, user.current_genre,  GENRE_FAMILIES))
     mood_match  = (W_LONG_TERM * _family_match(song.mood,  user.favorite_mood,  MOOD_FAMILIES)
                  + W_SESSION   * _family_match(song.mood,  user.current_mood,   MOOD_FAMILIES))
-    categorical_score = (genre_match + mood_match) / 2
+    categorical_score = W_GENRE_CAT * genre_match + W_MOOD_CAT * mood_match
 
-    tempo_norm        = (song.tempo_bpm    - bpm_min) / bpm_range if bpm_range > 0 else 0.5
-    target_tempo_norm = (user.target_tempo - bpm_min) / bpm_range if bpm_range > 0 else 0.5
+    tempo_norm        = (song.tempo_bpm    - BPM_MIN) / BPM_RANGE
+    target_tempo_norm = (user.target_tempo - BPM_MIN) / BPM_RANGE
 
     energy_sim   = 1 - abs(song.energy       - user.target_energy)
     valence_sim  = 1 - abs(song.valence       - user.target_valence)
@@ -98,25 +113,30 @@ def _score_song(song: Song, user: UserProfile, bpm_min: float, bpm_range: float)
     acoustic_sim = 1 - abs(song.acousticness  - user.target_acousticness)
     tempo_sim    = 1 - abs(tempo_norm         - target_tempo_norm)
 
+    genre_gate = max(
+        _family_match(song.genre, user.favorite_genre, GENRE_FAMILIES),
+        _family_match(song.genre, user.current_genre,  GENRE_FAMILIES),
+        GENRE_FLOOR,
+    )
     numeric_score = (W_ENERGY       * energy_sim
                    + W_VALENCE      * valence_sim
                    + W_DANCE        * dance_sim
                    + W_ACOUSTICNESS * acoustic_sim
-                   + W_TEMPO        * tempo_sim)
+                   + W_TEMPO        * tempo_sim) * genre_gate
 
     return W_CAT * categorical_score + W_NUM * numeric_score
 
 
-def _score_song_dict(song: dict, user: dict, bpm_min: float, bpm_range: float) -> float:
+def _score_song_dict(song: dict, user: dict) -> float:
     """Score a song dict against a user_prefs dict (functional interface)."""
     genre_match = (W_LONG_TERM * _family_match(song["genre"], user["genre"],         GENRE_FAMILIES)
                  + W_SESSION   * _family_match(song["genre"], user["current_genre"],  GENRE_FAMILIES))
     mood_match  = (W_LONG_TERM * _family_match(song["mood"],  user["mood"],           MOOD_FAMILIES)
                  + W_SESSION   * _family_match(song["mood"],  user["current_mood"],   MOOD_FAMILIES))
-    categorical_score = (genre_match + mood_match) / 2
+    categorical_score = W_GENRE_CAT * genre_match + W_MOOD_CAT * mood_match
 
-    tempo_norm        = (song["tempo_bpm"]    - bpm_min) / bpm_range if bpm_range > 0 else 0.5
-    target_tempo_norm = (user["target_tempo"] - bpm_min) / bpm_range if bpm_range > 0 else 0.5
+    tempo_norm        = (song["tempo_bpm"]    - BPM_MIN) / BPM_RANGE
+    target_tempo_norm = (user["target_tempo"] - BPM_MIN) / BPM_RANGE
 
     energy_sim   = 1 - abs(song["energy"]       - user["target_energy"])
     valence_sim  = 1 - abs(song["valence"]       - user["target_valence"])
@@ -124,11 +144,16 @@ def _score_song_dict(song: dict, user: dict, bpm_min: float, bpm_range: float) -
     acoustic_sim = 1 - abs(song["acousticness"]  - user["target_acousticness"])
     tempo_sim    = 1 - abs(tempo_norm             - target_tempo_norm)
 
+    genre_gate = max(
+        _family_match(song["genre"], user["genre"],        GENRE_FAMILIES),
+        _family_match(song["genre"], user["current_genre"], GENRE_FAMILIES),
+        GENRE_FLOOR,
+    )
     numeric_score = (W_ENERGY       * energy_sim
                    + W_VALENCE      * valence_sim
                    + W_DANCE        * dance_sim
                    + W_ACOUSTICNESS * acoustic_sim
-                   + W_TEMPO        * tempo_sim)
+                   + W_TEMPO        * tempo_sim) * genre_gate
 
     return W_CAT * categorical_score + W_NUM * numeric_score
 
@@ -162,12 +187,12 @@ def _apply_variety_ranking(scored: list) -> list:
     while pool:
         best_idx, best_eff = None, -999.0
         for i, (s, sc, ex) in enumerate(pool):
-            adj = ((-0.10 if last_genre and s["genre"] == last_genre else 0.0) +
-                   (-0.10 if last_mood  and s["mood"]  == last_mood  else 0.0))
+            adj = ((-0.15 if last_genre and s["genre"] == last_genre else 0.0) +
+                   (-0.15 if last_mood  and s["mood"]  == last_mood  else 0.0))
             if sc + adj > best_eff:
                 best_eff, best_idx = sc + adj, i
         s, sc, ex = pool.pop(best_idx)
-        ranked.append((s, sc, ex))
+        ranked.append((s, max(best_eff, 0.0), ex))
         last_genre, last_mood = s["genre"], s["mood"]
     return ranked
 
@@ -178,24 +203,21 @@ class Recommender:
     Required by tests/test_recommender.py
     """
     def __init__(self, songs: List[Song]):
-        """Initialize recommender with songs and compute BPM range."""
+        """Initialize recommender with a list of songs."""
         self.songs = songs
-        self._bpm_min   = min(s.tempo_bpm for s in songs)
-        self._bpm_max   = max(s.tempo_bpm for s in songs)
-        self._bpm_range = self._bpm_max - self._bpm_min
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
         """Return top k songs recommended for the user."""
         scored = sorted(
             self.songs,
-            key=lambda s: _score_song(s, user, self._bpm_min, self._bpm_range),
+            key=lambda s: _score_song(s, user),
             reverse=True,
         )
         return scored[:k]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         """Generate explanation for why a song is recommended."""
-        score     = _score_song(song, user, self._bpm_min, self._bpm_range)
+        score     = _score_song(song, user)
         genre_m   = _family_match(song.genre, user.current_genre, GENRE_FAMILIES)
         mood_m    = _family_match(song.mood,  user.current_mood,  MOOD_FAMILIES)
         genre_lbl = "exact" if genre_m == 1.0 else ("close" if genre_m == 0.5 else "different")
@@ -247,16 +269,75 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     if not songs:
         return []
 
-    bpm_min   = min(s["tempo_bpm"] for s in songs)
-    bpm_max   = max(s["tempo_bpm"] for s in songs)
-    bpm_range = bpm_max - bpm_min
-
     scored = []
     for song in songs:
-        score       = _score_song_dict(song, user_prefs, bpm_min, bpm_range)
+        score       = _score_song_dict(song, user_prefs)
         explanation = _explain_dict(song, user_prefs, score)
         scored.append((song, score, explanation))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     ranked = _apply_variety_ranking(scored)
     return ranked[:k]
+
+
+if __name__ == "__main__":
+    import os
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "songs.csv")
+    songs = load_songs(csv_path)
+
+    demo_profiles = {
+        "High-Energy Pop": {
+            "genre": "pop", "mood": "happy",
+            "current_genre": "pop", "current_mood": "happy",
+            "target_energy": 0.85, "target_valence": 0.75,
+            "target_danceability": 0.78, "target_acousticness": 0.15,
+            "target_tempo": 128,
+        },
+        "Chill Lofi": {
+            "genre": "lofi", "mood": "relaxed",
+            "current_genre": "lofi", "current_mood": "chill",
+            "target_energy": 0.25, "target_valence": 0.45,
+            "target_danceability": 0.35, "target_acousticness": 0.75,
+            "target_tempo": 90,
+        },
+        "Deep Intense Rock": {
+            "genre": "rock", "mood": "intense",
+            "current_genre": "rock", "current_mood": "angry",
+            "target_energy": 0.88, "target_valence": 0.25,
+            "target_danceability": 0.45, "target_acousticness": 0.10,
+            "target_tempo": 125,
+        },
+        "High-Energy Sadness": {
+            "genre": "electronic", "mood": "sad",
+            "current_genre": "electronic", "current_mood": "sad",
+            "target_energy": 0.90, "target_valence": 0.20,
+            "target_danceability": 0.85, "target_acousticness": 0.15,
+            "target_tempo": 140,
+        },
+        "Acoustic Intensity": {
+            "genre": "rock", "mood": "intense",
+            "current_genre": "rock", "current_mood": "intense",
+            "target_energy": 0.88, "target_valence": 0.25,
+            "target_danceability": 0.15, "target_acousticness": 0.92,
+            "target_tempo": 130,
+        },
+        "Relaxed Workout": {
+            "genre": "pop", "mood": "relaxed",
+            "current_genre": "pop", "current_mood": "relaxed",
+            "target_energy": 0.85, "target_valence": 0.35,
+            "target_danceability": 0.88, "target_acousticness": 0.20,
+            "target_tempo": 90,
+        },
+    }
+
+    CYAN  = "\033[96m"
+    GREEN = "\033[92m"
+    GRAY  = "\033[90m"
+    BOLD  = "\033[1m"
+    RESET = "\033[0m"
+
+    for name, prefs in demo_profiles.items():
+        print(f"\n{CYAN}{BOLD}=== {name} ==={RESET}")
+        for song, score, explanation in recommend_songs(prefs, songs, k=5):
+            print(f"  {CYAN}{BOLD}{song['title']}{RESET}  {GREEN}score={score:.3f}{RESET}")
+            print(f"  {GRAY}{explanation}{RESET}")

@@ -104,31 +104,31 @@ family_match(a, b) →
     0.5   if a and b share a genre/mood family (same-family partial credit)
     0.0   otherwise
 
-genre_match = 0.30 × family_match(song.genre, favorite_genre)
-            + 0.70 × family_match(song.genre, current_genre)
+genre_match = 0.50 × family_match(song.genre, favorite_genre)
+            + 0.50 × family_match(song.genre, current_genre)
 
-mood_match  = 0.30 × family_match(song.mood, favorite_mood)
-            + 0.70 × family_match(song.mood, current_mood)
+mood_match  = 0.50 × family_match(song.mood, favorite_mood)
+            + 0.50 × family_match(song.mood, current_mood)
 
-categorical_score = (genre_match + mood_match) / 2
+categorical_score = 0.33 × genre_match + 0.67 × mood_match
 ```
 
 **Genre families** (songs in the same family receive 0.5 partial credit):
-- indie: indie, indie pop, folk, ballad
+- indie: indie, indie pop, folk
 - electronic: electronic, synthwave, techno, lofi, ambient
 - rock: rock, metal, punk
 - urban: hip-hop, r&b, soul, funk
-- classical: classical, country, blues, gospel
-- pop: pop, disco, latin, reggae
+- classical: classical, country, blues, gospel, jazz
+- pop: pop, disco, latin, reggae, ballad
 
 **Mood families:**
 - melancholic: sad, melancholic, moody, introspective
-- calm: chill, relaxed, peaceful, dreamy
-- energetic: energetic, intense, angry
+- calm: chill, relaxed, peaceful, dreamy, focused
+- energetic: energetic
+- intense: intense, angry
 - positive: happy, joyful, romantic
-- focused: focused
 
-**Why the 0.30 / 0.70 split:** Recommendations should respond to what the user is listening to right now (0.70), while still respecting long-term taste as a fallback (0.30). This reduces the filter bubble effect where a user would otherwise be locked into their all-time favorite genre/mood forever.
+**Why the 0.50 / 0.50 split:** Equal weighting balances current listening context against long-term taste. An earlier 0.30/0.70 split caused a filter bubble: one off-genre session could override all-time history, locking recommendations into the session's genre. At 50/50, neither signal dominates — a user's established taste remains equally weighted against what they're listening to right now.
 
 **Previous design issue:** The original formula used only `favorite_genre` / `favorite_mood` with binary matching (1.0 or 0.0) — session-blind with no sensitivity to current listening context and no partial credit for related genres/moods.
 
@@ -136,15 +136,15 @@ categorical_score = (genre_match + mood_match) / 2
 
 ### Step 2: Numeric Similarity
 
-Tempo is normalized dynamically using the catalog's actual BPM range — no hard-coded values:
+Tempo is normalized using fixed BPM constants (`BPM_MIN = 60`, `BPM_MAX = 200`, `BPM_RANGE = 140`):
 
 ```
-bpm_min   = min(song.tempo_bpm for all songs in catalog)
-bpm_max   = max(song.tempo_bpm for all songs in catalog)
-bpm_range = bpm_max - bpm_min
+BPM_MIN   = 60.0
+BPM_MAX   = 200.0
+BPM_RANGE = 140.0
 
-tempo_norm        = (song.tempo_bpm    - bpm_min) / bpm_range
-target_tempo_norm = (user.target_tempo - bpm_min) / bpm_range
+tempo_norm        = (song.tempo_bpm    - BPM_MIN) / BPM_RANGE
+target_tempo_norm = (user.target_tempo - BPM_MIN) / BPM_RANGE
 
 energy_sim   = 1 - |song.energy       - user.target_energy|
 valence_sim  = 1 - |song.valence      - user.target_valence|
@@ -157,16 +157,22 @@ Each similarity is in range [0, 1]. Peak (1.0) when song value exactly matches u
 
 **Previous design issue:** `tempo_bpm` was a Song field but unused in scoring.
 
-**Fix:** Added `tempo_sim` as a scored numeric feature. Normalized dynamically from catalog min/max so the formula auto-adapts if the catalog changes — no hard-coded BPM constants.
+**Fix:** Added `tempo_sim` as a scored numeric feature. Normalized using fixed constants (`BPM_MIN = 60.0`, `BPM_MAX = 200.0`, `BPM_RANGE = 140.0`) for stable scores regardless of catalog composition.
 
 ### Step 3: Numeric Score
 
 ```
-numeric_score = 0.30 × energy_sim
+genre_gate = max(
+    family_match(song.genre, favorite_genre),
+    family_match(song.genre, current_genre),
+    0.25,                                      ← floor prevents complete exclusion
+)
+
+numeric_score = (0.35 × energy_sim
               + 0.25 × valence_sim
               + 0.25 × dance_sim
               + 0.10 × acoustic_sim
-              + 0.10 × tempo_sim
+              + 0.05 × tempo_sim) × genre_gate
 ```
 
 **Previous design issue:** Acousticness weight was 0.20, no tempo term (weights summed to 1.0 without tempo).
@@ -183,13 +189,16 @@ SCORE = 0.40 × categorical_score + 0.60 × numeric_score
 
 | Term | Max contribution to SCORE |
 |---|---|
-| Categorical (genre + mood) | 0.40 |
-| Energy | 0.60 × 0.30 = **0.18** |
-| Valence | 0.60 × 0.25 = **0.15** |
-| Danceability | 0.60 × 0.25 = **0.15** |
-| Acousticness | 0.60 × 0.10 = **0.06** |
-| Tempo | 0.60 × 0.10 = **0.06** |
+| Genre (categorical) | 0.40 × 0.33 = **0.132** |
+| Mood (categorical) | 0.40 × 0.67 = **0.268** |
+| Energy | 0.60 × 0.35 × genre_gate ≤ **0.210** |
+| Valence | 0.60 × 0.25 × genre_gate ≤ **0.150** |
+| Danceability | 0.60 × 0.25 × genre_gate ≤ **0.150** |
+| Acousticness | 0.60 × 0.10 × genre_gate ≤ **0.060** |
+| Tempo | 0.60 × 0.05 × genre_gate ≤ **0.030** |
 | **Total** | **1.00** |
+
+`genre_gate` scales all numeric terms simultaneously: exact-genre match = 1.00, same-family = 0.50, foreign genre = 0.25 (floor).
 
 ---
 
@@ -200,12 +209,13 @@ After scoring, songs are re-ordered using a greedy variety re-ranker to prevent 
 ```
 For each pick from the remaining pool:
     effective_score = final_score
-                    - 0.10 if same genre as previous pick
-                    - 0.10 if same mood as previous pick
+                    - 0.15 if same genre as previous pick
+                    - 0.15 if same mood as previous pick
+    effective_score = max(effective_score, 0.0)   ← clamped to keep scores in [0, 1]
     Pick the song with highest effective_score
 ```
 
-Maximum variety penalty per song: −0.20 (both genre and mood repeat).
+Maximum variety penalty per song: −0.30 (both genre and mood repeat).
 
 This is applied **after** scoring, so it only shuffles the top pool — it does not surface low-scoring songs.
 
@@ -224,9 +234,11 @@ Not yet implemented in `src/recommender.py`.
 
 ## Known Limitations
 
-- **Small catalog** — 10 songs. Real recommenders operate on millions of tracks.
+- **Small catalog** — 35 songs. Real recommenders operate on millions of tracks.
 - **Static numeric targets** — `target_energy`, `target_valence`, etc. do not adapt over time. Only categorical signals are session-aware.
-- **Partial filter bubble mitigation** — the 0.70 current session weight reduces but does not eliminate echo chamber risk. If the user always listens to the same genre, `current_genre` and `favorite_genre` converge.
+- **Contradictory profiles** — profiles that combine conflicting signals (e.g. high energy + sad mood, high energy + relaxed mood) cannot be fully reconciled. The formula averages conflicting features rather than resolving them.
+- **Genre floor still allows bleed** — the `GENRE_FLOOR = 0.25` minimum means genre-foreign songs are never fully excluded. Niche users with under-represented genres benefit from this, but a rock user can still see hip-hop at position 4–5.
+- **Partial filter bubble mitigation** — the 50/50 session/long-term split reduces but does not eliminate echo chamber risk. If a user always listens to the same genre, `current_genre` and `favorite_genre` converge and the split has no effect.
 - **No content understanding** — lyrics, instrumentation, and context (time of day, activity) are ignored.
 - **Variety ranking is post-hoc** — applies only to the already-scored top pool. Low-scoring songs from different genres cannot surface regardless of variety.
 
@@ -236,6 +248,10 @@ Not yet implemented in `src/recommender.py`.
 
 **Explainability over accuracy.** All weights are hand-set and fixed. Any score can be calculated by hand and fully audited. This is the opposite of production ML recommenders (Spotify, YouTube) where weights are learned from billions of interactions and individual predictions cannot be explained.
 
-**Short-term signal weighted higher than long-term.** A 0.70 / 0.30 split favors current session context. The assumption is that listening behavior in a session is a stronger signal of immediate intent than historical averages.
+**Session and long-term signals weighted equally.** A 0.50 / 0.50 split treats current session and all-time history as equally valid taste signals. An earlier 0.70 session weight caused a filter bubble — one off-genre session overrode established taste. Equal weighting prevents any single session from dominating.
+
+**Genre floor prevents full exclusion.** `GENRE_FLOOR = 0.25` means genre-foreign songs always contribute at least 25% of their numeric score. This is intentional: niche genres (ambient, gospel, folk) are under-represented in the catalog, so a hard genre gate would leave those users with near-zero scores for most songs. The floor preserves cross-genre discovery while still heavily penalizing genre mismatch.
+
+**Mood families split energetic from intense/angry.** These had been grouped as equals, but "energetic" (upbeat, positive activation) and "angry/intense" (negative valence, aggression) describe fundamentally different emotional states. Splitting them prevents workout-profile users from receiving aggressive metal recommendations at family-match proximity.
 
 **Categorical weight (0.40) is high by design.** Genre and mood are the most interpretable features — matching them produces results that feel "obviously right" to users. Numeric features (energy, valence, etc.) provide fine-grained differentiation within a genre/mood bucket.
