@@ -4,20 +4,21 @@ from dataclasses import dataclass
 
 # ── Genre & Mood proximity families ──────────────────────────────────────────
 GENRE_FAMILIES = {
-    "indie":      {"indie", "indie pop", "folk"},
-    "electronic": {"electronic", "synthwave", "techno", "lofi", "ambient"},
-    "rock":       {"rock", "metal", "punk"},
-    "urban":      {"hip-hop", "r&b", "soul", "funk"},
-    "classical":  {"classical", "country", "blues", "gospel", "jazz"},
-    "pop":        {"pop", "disco", "latin", "reggae", "ballad"},
+    "indie":      {"indie", "indie pop", "folk", "dream pop", "shoegaze"},
+    "electronic": {"electronic", "synthwave", "techno", "lofi", "ambient", "house", "trance", "chillwave"},
+    "rock":       {"rock", "metal", "punk", "grunge", "emo"},
+    "urban":      {"hip-hop", "r&b", "soul", "funk", "trap"},
+    "classical":  {"classical", "country", "blues", "gospel", "jazz", "bossa nova"},
+    "pop":        {"pop", "disco", "latin", "reggae", "ballad", "k-pop"},
+    "world":      {"afrobeats", "flamenco", "celtic"},
 }
 
 MOOD_FAMILIES = {
-    "melancholic": {"sad", "melancholic", "moody", "introspective"},
+    "melancholic": {"sad", "melancholic", "moody", "introspective", "nostalgic", "wistful"},
     "calm":        {"chill", "relaxed", "peaceful", "dreamy", "focused"},
-    "energetic":   {"energetic"},
-    "intense":     {"intense", "angry"},
-    "positive":    {"happy", "joyful", "romantic"},
+    "energetic":   {"energetic", "euphoric", "empowered"},
+    "intense":     {"intense", "angry", "anxious"},
+    "positive":    {"happy", "joyful", "romantic", "hopeful", "uplifting"},
 }
 
 # Top-level score weights
