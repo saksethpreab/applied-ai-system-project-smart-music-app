@@ -6,9 +6,9 @@ from dataclasses import dataclass
 GENRE_FAMILIES = {
     "indie":      {"indie", "indie pop", "folk", "dream pop", "shoegaze"},
     "electronic": {"electronic", "synthwave", "techno", "lofi", "ambient", "house", "trance", "chillwave"},
-    "rock":       {"rock", "metal", "punk", "grunge", "emo"},
+    "rock":       {"rock", "metal", "punk", "grunge", "emo", "christian rock"},
     "urban":      {"hip-hop", "r&b", "soul", "funk", "trap"},
-    "classical":  {"classical", "country", "blues", "gospel", "jazz", "bossa nova"},
+    "classical":  {"classical", "country", "blues", "gospel", "jazz", "bossa nova", "hymn", "spiritual", "worship"},
     "pop":        {"pop", "disco", "latin", "reggae", "ballad", "k-pop"},
     "world":      {"afrobeats", "flamenco", "celtic"},
 }

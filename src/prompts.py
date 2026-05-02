@@ -15,11 +15,11 @@ KNOWN_GENRES = [
     # indie family
     "indie", "folk", "dream pop", "shoegaze",
     # rock family
-    "rock", "metal", "punk", "grunge", "emo",
+    "rock", "metal", "punk", "grunge", "emo", "christian rock",
     # urban family
     "hip-hop", "r&b", "soul", "funk", "trap",
     # classical family
-    "jazz", "blues", "classical", "country", "gospel", "bossa nova",
+    "jazz", "blues", "classical", "country", "gospel", "bossa nova", "hymn", "spiritual", "worship",
     # world family
     "afrobeats", "flamenco", "celtic",
 ]

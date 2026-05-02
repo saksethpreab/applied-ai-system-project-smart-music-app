@@ -251,3 +251,52 @@ id,title,artist,genre,mood,energy,tempo_bpm,valence,danceability,acousticness
 250,Africa,Toto,pop,nostalgic,0.62,93,0.55,0.58,0.15
 251,September,Earth Wind & Fire,funk,happy,0.84,126,0.88,0.82,0.05
 252,Demons,Imagine Dragons,pop,melancholic,0.48,88,0.35,0.55,0.35
+253,Oceans (Where Feet May Fail),Hillsong United,worship,peaceful,0.45,68,0.55,0.38,0.72
+254,What a Beautiful Name,Hillsong Worship,worship,joyful,0.65,68,0.82,0.58,0.62
+255,How Great Is Our God,Chris Tomlin,worship,empowered,0.68,76,0.75,0.58,0.55
+256,10000 Reasons (Bless the Lord),Matt Redman,worship,hopeful,0.60,73,0.82,0.55,0.68
+257,Reckless Love,Cory Asbury,worship,hopeful,0.55,66,0.78,0.50,0.70
+258,Way Maker,Sinach,gospel,joyful,0.75,75,0.85,0.70,0.55
+259,Cornerstone,Hillsong Worship,worship,peaceful,0.55,70,0.72,0.50,0.68
+260,Shout to the Lord,Hillsong,worship,empowered,0.72,72,0.78,0.58,0.52
+261,Good Good Father,Chris Tomlin,worship,hopeful,0.58,74,0.80,0.52,0.65
+262,In Christ Alone,Stuart Townend,hymn,peaceful,0.50,80,0.72,0.45,0.72
+263,Blessed Be Your Name,Matt Redman,worship,empowered,0.68,80,0.68,0.60,0.55
+264,Here I Am to Worship,Tim Hughes,worship,peaceful,0.52,68,0.75,0.48,0.70
+265,Lord I Need You,Matt Maher,worship,introspective,0.48,72,0.68,0.45,0.72
+266,Amazing Grace (My Chains Are Gone),Chris Tomlin,hymn,hopeful,0.58,68,0.80,0.50,0.68
+267,Mighty to Save,Hillsong,worship,empowered,0.72,76,0.78,0.60,0.55
+268,From the Inside Out,Hillsong United,worship,hopeful,0.62,72,0.72,0.52,0.62
+269,Build My Life,Housefires,worship,peaceful,0.52,70,0.78,0.50,0.68
+270,Holy Spirit,Francesca Battistelli,worship,peaceful,0.50,72,0.75,0.48,0.70
+271,Graves into Gardens,Elevation Worship,worship,empowered,0.70,72,0.80,0.60,0.55
+272,O Come to the Altar,Elevation Worship,worship,hopeful,0.55,68,0.75,0.48,0.65
+273,Do It Again,Elevation Worship,worship,hopeful,0.68,76,0.78,0.58,0.58
+274,Dare You to Move,Switchfoot,christian rock,empowered,0.80,104,0.62,0.65,0.15
+275,Meant to Live,Switchfoot,christian rock,energetic,0.88,128,0.55,0.68,0.08
+276,Voice of Truth,Casting Crowns,christian rock,hopeful,0.65,96,0.70,0.58,0.35
+277,Who Am I,Casting Crowns,christian rock,introspective,0.55,80,0.62,0.50,0.45
+278,Jesus Freak,DC Talk,christian rock,empowered,0.85,128,0.58,0.68,0.10
+279,Beautiful Letdown,Switchfoot,christian rock,hopeful,0.72,108,0.60,0.62,0.18
+280,Everything,Lifehouse,rock,hopeful,0.65,102,0.62,0.55,0.35
+281,Break Every Chain,Tasha Cobbs,gospel,empowered,0.68,72,0.78,0.60,0.52
+282,Take Me to the King,Tamela Mann,gospel,hopeful,0.62,68,0.75,0.52,0.58
+283,Total Praise,Richard Smallwood,gospel,joyful,0.60,72,0.85,0.52,0.62
+284,Holy Ghost,Kirk Franklin,gospel,joyful,0.82,100,0.88,0.78,0.25
+285,I Smile,Kirk Franklin,gospel,happy,0.75,104,0.85,0.72,0.30
+286,Silver and Gold,Kirk Franklin,gospel,joyful,0.72,100,0.88,0.70,0.28
+287,Lean on Me,Kirk Franklin,gospel,hopeful,0.65,86,0.82,0.65,0.35
+288,Swing Low Sweet Chariot,traditional,spiritual,peaceful,0.35,72,0.68,0.38,0.85
+289,Go Down Moses,traditional,spiritual,intense,0.55,76,0.45,0.45,0.80
+290,Wade in the Water,traditional,spiritual,peaceful,0.42,80,0.58,0.48,0.82
+291,This Little Light of Mine,traditional,spiritual,happy,0.62,96,0.85,0.62,0.78
+292,I'll Fly Away,Alison Krauss & Gillian Welch,spiritual,hopeful,0.65,140,0.80,0.62,0.75
+293,His Eye Is on the Sparrow,Lauryn Hill,gospel,peaceful,0.45,68,0.75,0.42,0.72
+294,Precious Lord Take My Hand,Mahalia Jackson,gospel,peaceful,0.38,64,0.72,0.38,0.82
+295,How Great Thou Art,Carrie Underwood,hymn,empowered,0.62,72,0.78,0.48,0.72
+296,Be Thou My Vision,traditional,hymn,peaceful,0.42,76,0.72,0.38,0.85
+297,Come Thou Fount,Sufjan Stevens,hymn,hopeful,0.45,80,0.72,0.40,0.82
+298,Great Is Thy Faithfulness,traditional,hymn,hopeful,0.52,72,0.80,0.45,0.80
+299,Holy Holy Holy,traditional,hymn,joyful,0.58,76,0.78,0.48,0.78
+300,A Mighty Fortress Is Our God,traditional,hymn,empowered,0.62,84,0.68,0.50,0.75
+301,It Is Well with My Soul,traditional,hymn,peaceful,0.42,68,0.72,0.40,0.85
