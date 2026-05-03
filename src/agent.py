@@ -210,6 +210,7 @@ def analyze_prompt(
 def draft_playlist(
     user_prefs: dict,
     songs: list[dict],
+    seen_ids: set = None,
 ) -> list[tuple[dict, float, str]]:
     """
     STEP 2 — DRAFT (rule engine only, no LLM).
@@ -217,7 +218,7 @@ def draft_playlist(
     Call recommend_songs() with the structured prefs to get 5 candidates.
     Returns list of (song_dict, score, explanation) tuples.
     """
-    results = recommend_songs(user_prefs, songs, k=5)
+    results = recommend_songs(user_prefs, songs, k=5, seen_ids=seen_ids)
     print(f"[DRAFT]   {len(results)} songs selected:")
     for i, (song, score, _) in enumerate(results, 1):
         print(f"[DRAFT]   {i}. {song['title']} — {song['artist']}  score={score:.3f}")
@@ -327,9 +328,12 @@ def _compute_metrics(
     }
 
 
-def run_agent(user_prompt: str) -> dict[str, Any]:
+def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     """
     Top-level orchestrator. Run the full Plan-Act-Check pipeline.
+
+    Pass seen_ids (a set of song IDs already recommended in prior calls) to
+    prevent repeat recommendations across sessions.
 
     Returns a dict with keys:
         user_prompt, analysis, draft_playlist, final_playlist, metrics
@@ -345,7 +349,7 @@ def run_agent(user_prompt: str) -> dict[str, Any]:
 
     # ── Step 2: DRAFT ──────────────────────────────────────────────────────────
     print("\n--- STEP 2: DRAFT (Rule Engine) ---")
-    draft = draft_playlist(user_prefs, songs)
+    draft = draft_playlist(user_prefs, songs, seen_ids=seen_ids)
 
     # ── Step 3: SELF-CORRECT ───────────────────────────────────────────────────
     print("\n--- STEP 3: SELF-CORRECT (LLM Call #2) ---")
@@ -367,6 +371,8 @@ def run_agent(user_prompt: str) -> dict[str, Any]:
             for song, score, expl in playlist
         ]
 
+    recommended_ids = {song["id"] for song, _, _ in final_playlist}
+
     return {
         "user_prompt": user_prompt,
         "analysis": {
@@ -374,9 +380,10 @@ def run_agent(user_prompt: str) -> dict[str, Any]:
             "reasoning":  reasoning,
             "confidence": confidence,
         },
-        "draft_playlist": _serialise(draft),
-        "final_playlist": _serialise(final_playlist),
-        "metrics": metrics,
+        "draft_playlist":   _serialise(draft),
+        "final_playlist":   _serialise(final_playlist),
+        "metrics":          metrics,
+        "recommended_ids":  recommended_ids,
     }
 
 

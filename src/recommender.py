@@ -37,9 +37,8 @@ W_ACOUSTICNESS = 0.10
 W_TEMPO       = 0.05
 
 # Categorical sub-weights for genre vs mood (must sum to 1.0)
-# Genre halved relative to mood: was 0.50/0.50, now 0.33/0.67
-W_GENRE_CAT = 0.33
-W_MOOD_CAT  = 0.67
+W_GENRE_CAT = 0.50
+W_MOOD_CAT  = 0.50
 
 # Fixed BPM scale for stable tempo normalization regardless of catalog size
 BPM_MIN   = 60.0
@@ -49,7 +48,7 @@ BPM_RANGE = BPM_MAX - BPM_MIN  # 140.0
 # Minimum genre-gate multiplier applied to numeric score.
 # Keeps genre-foreign songs eligible (cross-genre discovery) but caps
 # their numeric contribution so exact-genre matches always win on genre.
-GENRE_FLOOR = 0.25
+GENRE_FLOOR = 0.10
 
 
 def _family_match(a: str, b: str, families: dict) -> float:
@@ -270,7 +269,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     # Expected return format: (score, reasons)
     return []
 
-def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
+def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, seen_ids: set = None) -> List[Tuple[Dict, float, str]]:
     """
     Functional implementation of the recommendation logic.
     Required by src/main.py
@@ -279,8 +278,10 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     if not songs:
         return []
 
+    catalog = [s for s in songs if seen_ids is None or s["id"] not in seen_ids]
+
     scored = []
-    for song in songs:
+    for song in catalog:
         score       = _score_song_dict(song, user_prefs)
         explanation = _explain_dict(song, user_prefs, score)
         scored.append((song, score, explanation))
