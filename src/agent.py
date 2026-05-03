@@ -106,6 +106,16 @@ def _call_llm(
     return ""  # unreachable
 
 
+def _strip_fences(raw: str) -> str:
+    """Strip markdown code fences the model sometimes wraps around JSON."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("```", 1)[0]
+    return raw.strip()
+
+
 def _parse_json_with_retry(
     raw: str,
     client: anthropic.Anthropic,
@@ -115,13 +125,13 @@ def _parse_json_with_retry(
 ) -> dict:
     """Parse raw as JSON; retry the LLM once on parse failure; return fallback on second failure."""
     try:
-        return json.loads(raw)
+        return json.loads(_strip_fences(raw))
     except json.JSONDecodeError:
         print(f"[{step_label}] JSON parse error — retrying with stricter instruction...")
         retry_user = user + "\n\nIMPORTANT: Your previous response was not valid JSON. Respond with ONLY the JSON object, no other text."
         try:
             raw2 = _call_llm(client, system, retry_user, step_label)
-            return json.loads(raw2)
+            return json.loads(_strip_fences(raw2))
         except json.JSONDecodeError:
             print(f"[{step_label}] JSON parse failed twice — using fallback.")
             if step_label == "ANALYZE":

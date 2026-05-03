@@ -101,19 +101,19 @@ Evaluate whether each song genuinely fits the spirit of the request.
 Respond with ONLY valid JSON — no markdown fences, no prose, no extra keys.
 
 Required JSON schema:
-{{
+{
   "evaluations": [
-    {{
+    {
       "song_id":    <integer>,
       "title":      "<string>",
       "fit_score":  <float 0.0-1.0>,
       "fit_reason": "<1 sentence>",
       "keep":       <true|false>
-    }}
+    }
   ],
   "approved":          <true|false>,
   "overall_reasoning": "<1-2 sentences on the playlist as a whole>"
-}}
+}
 
 Guidelines:
   - fit_score: 0.0 = terrible fit, 1.0 = perfect fit for the request
