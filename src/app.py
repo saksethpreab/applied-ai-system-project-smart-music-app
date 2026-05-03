@@ -7,7 +7,7 @@ import streamlit as st
 from agent import refresh_playlist
 
 st.set_page_config(
-    page_title="Smart Music Recommender",
+    page_title="MoodSync",
     page_icon="🎵",
     layout="centered",
 )
@@ -23,7 +23,7 @@ for key, default in [
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
-st.title("🎵 Smart Music Recommender")
+st.title("🎵 MoodSync")
 st.caption("Powered by Claude AI + a rule-based scoring engine")
 
 # ── Input ─────────────────────────────────────────────────────────────────────
