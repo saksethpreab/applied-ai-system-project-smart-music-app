@@ -397,6 +397,28 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     }
 
 
+# ── Refresh / session helpers ─────────────────────────────────────────────────
+
+# A session is just a plain dict: { prompt_string -> set of seen song IDs }
+# Pass the same dict on every call and it accumulates history automatically.
+
+def refresh_playlist(user_prompt: str, session: dict) -> dict[str, Any]:
+    """
+    Run the pipeline for user_prompt, skipping every song already recommended
+    for that prompt in this session.
+
+    Usage:
+        session = {}
+        r1 = refresh_playlist("chill late-night vibes", session)  # songs 1-5
+        r2 = refresh_playlist("chill late-night vibes", session)  # songs 6-10
+        r3 = refresh_playlist("chill late-night vibes", session)  # songs 11-15
+    """
+    seen = session.get(user_prompt, set())
+    result = run_agent(user_prompt, seen_ids=seen)
+    session[user_prompt] = seen | result["recommended_ids"]
+    return result
+
+
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
-from agent import run_agent
+from agent import refresh_playlist
 
 st.set_page_config(
     page_title="Smart Music Recommender",
@@ -12,7 +12,12 @@ st.set_page_config(
     layout="centered",
 )
 
-for key, default in [("result", None), ("last_prompt", None), ("error", None)]:
+for key, default in [
+    ("result", None),
+    ("last_prompt", None),
+    ("error", None),
+    ("session", {}),   # maps prompt string -> set of seen song IDs
+]:
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -32,16 +37,26 @@ user_prompt = st.text_area(
     ),
     height=120,
 )
-run_button = st.button("Get Recommendations", type="primary")
+col_run, col_refresh = st.columns([2, 1])
+run_button     = col_run.button("Get Recommendations", type="primary",   use_container_width=True)
+refresh_button = col_refresh.button(
+    "🔄 Refresh",
+    type="secondary",
+    use_container_width=True,
+    disabled=st.session_state["last_prompt"] is None,
+)
 
 # ── Run logic ─────────────────────────────────────────────────────────────────
 
-if run_button and user_prompt.strip():
+def _run(prompt: str, fresh: bool) -> None:
     st.session_state["error"] = None
+    if fresh:
+        st.session_state["session"].pop(prompt, None)   # clear history → new search
     try:
         with st.spinner("Analyzing your request and building your playlist..."):
-            st.session_state["result"] = run_agent(user_prompt.strip())
-            st.session_state["last_prompt"] = user_prompt.strip()
+            result = refresh_playlist(prompt, st.session_state["session"])
+            st.session_state["result"] = result
+            st.session_state["last_prompt"] = prompt
     except EnvironmentError as e:
         st.session_state["error"] = f"API key error: {e}"
         st.session_state["result"] = None
@@ -51,8 +66,13 @@ if run_button and user_prompt.strip():
     except Exception as e:
         st.session_state["error"] = f"Unexpected error: {e}"
         st.session_state["result"] = None
+
+if run_button and user_prompt.strip():
+    _run(user_prompt.strip(), fresh=True)
 elif run_button:
     st.warning("Please enter a prompt first.")
+elif refresh_button:
+    _run(st.session_state["last_prompt"], fresh=False)
 
 # ── Error display ─────────────────────────────────────────────────────────────
 
