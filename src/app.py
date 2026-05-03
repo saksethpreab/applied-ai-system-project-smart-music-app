@@ -69,10 +69,12 @@ def _run(prompt: str, fresh: bool) -> None:
 
 if run_button and user_prompt.strip():
     _run(user_prompt.strip(), fresh=True)
+    st.rerun()
 elif run_button:
     st.warning("Please enter a prompt first.")
 elif refresh_button:
     _run(st.session_state["last_prompt"], fresh=False)
+    st.rerun()
 
 # ── Error display ─────────────────────────────────────────────────────────────
 
