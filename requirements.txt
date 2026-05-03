@@ -3,3 +3,4 @@ pytest
 streamlit
 anthropic
 python-dotenv
+plotly

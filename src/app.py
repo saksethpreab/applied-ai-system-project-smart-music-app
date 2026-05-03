@@ -4,6 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
+import plotly.graph_objects as go
+import pandas as pd
 from agent import refresh_playlist
 
 st.set_page_config(
@@ -84,12 +86,13 @@ if st.session_state["error"]:
 # ── Results ───────────────────────────────────────────────────────────────────
 
 if st.session_state["result"] is not None:
-    result = st.session_state["result"]
+    result   = st.session_state["result"]
+    analysis = result["analysis"]
 
     # Metrics row
     st.subheader("Pipeline Metrics")
     m = result["metrics"]
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Confidence", f"{m['analysis_confidence']:.0%}")
     c2.metric("Draft Score", f"{m['draft_score']:.3f}")
     c3.metric("Corrections", m["correction_count"])
@@ -98,6 +101,8 @@ if st.session_state["result"] is not None:
         f"{m['final_avg_score']:.3f}",
         delta=f"{m['final_avg_score'] - m['draft_score']:+.3f}",
     )
+    _intent_labels = {"match": "Match", "uplift": "Uplift", "energize": "Energize", "calm": "Calm", "contrast": "Contrast"}
+    c5.metric("Intent", _intent_labels.get(analysis.get("emotion_intent", "match"), "Match"))
 
     st.divider()
 
@@ -116,12 +121,87 @@ if st.session_state["result"] is not None:
                 st.write(song["explanation"])
             st.divider()
 
+    # ── Emotional Space Map ───────────────────────────────────────────────────
+    with st.expander("🎭 Emotional Space Map", expanded=True):
+        prefs          = analysis["user_prefs"]
+        emotion_intent = analysis.get("emotion_intent", "match")
+        intent_display = {
+            "match": "Match mood", "uplift": "Uplift mood",
+            "energize": "Energize", "calm": "Calm down", "contrast": "Contrast",
+        }.get(emotion_intent, emotion_intent.title())
+
+        quadrant_shapes = [
+            dict(type="rect", x0=0,   x1=0.5, y0=0,   y1=0.5, fillcolor="rgba(100,120,200,0.12)", line_width=0, layer="below"),
+            dict(type="rect", x0=0,   x1=0.5, y0=0.5, y1=1.0, fillcolor="rgba(200,80,80,0.12)",   line_width=0, layer="below"),
+            dict(type="rect", x0=0.5, x1=1.0, y0=0,   y1=0.5, fillcolor="rgba(80,180,130,0.12)",  line_width=0, layer="below"),
+            dict(type="rect", x0=0.5, x1=1.0, y0=0.5, y1=1.0, fillcolor="rgba(255,200,50,0.12)",  line_width=0, layer="below"),
+        ]
+        quadrant_annotations = [
+            dict(x=0.25, y=0.93, text="Intense / Angry",      showarrow=False, font=dict(size=11, color="rgba(180,60,60,0.7)"),   xref="x", yref="y"),
+            dict(x=0.75, y=0.93, text="Energetic / Euphoric", showarrow=False, font=dict(size=11, color="rgba(180,150,20,0.7)"),  xref="x", yref="y"),
+            dict(x=0.25, y=0.07, text="Melancholic / Sad",    showarrow=False, font=dict(size=11, color="rgba(60,80,180,0.7)"),   xref="x", yref="y"),
+            dict(x=0.75, y=0.07, text="Calm / Peaceful",      showarrow=False, font=dict(size=11, color="rgba(40,140,90,0.7)"),   xref="x", yref="y"),
+        ]
+
+        target_trace = go.Scatter(
+            x=[prefs["target_valence"]],
+            y=[prefs["target_energy"]],
+            mode="markers+text",
+            marker=dict(symbol="star", size=22, color="#FFD700", line=dict(color="#333", width=1.5)),
+            text=["Target"],
+            textposition="top center",
+            textfont=dict(size=12, color="#333"),
+            name="Your Target",
+            hovertemplate=(
+                f"<b>Your Target</b><br>Intent: {intent_display}<br>"
+                "Valence: %{x:.2f}<br>Energy: %{y:.2f}<extra></extra>"
+            ),
+        )
+
+        songs_data   = result["final_playlist"]
+        hover_texts  = [
+            f"<b>{i}. {s['title']}</b><br>Artist: {s['artist']}<br>"
+            f"Genre: {s['genre'].title()} · Mood: {s['mood'].title()}<br>"
+            f"Valence: {s['valence']:.2f} · Energy: {s['energy']:.2f}<br>Score: {s['score']:.3f}"
+            for i, s in enumerate(songs_data, 1)
+        ]
+        songs_trace = go.Scatter(
+            x=[s["valence"] for s in songs_data],
+            y=[s["energy"]  for s in songs_data],
+            mode="markers+text",
+            marker=dict(symbol="circle", size=28, color="#4A90D9", line=dict(color="#1a5fa8", width=1.5), opacity=0.85),
+            text=[str(i) for i in range(1, len(songs_data) + 1)],
+            textposition="middle center",
+            textfont=dict(size=11, color="white", family="Arial Black"),
+            name="Recommended Songs",
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=hover_texts,
+        )
+
+        fig = go.Figure(data=[songs_trace, target_trace])
+        fig.update_layout(
+            shapes=quadrant_shapes,
+            annotations=quadrant_annotations,
+            xaxis=dict(title="Valence (negative → positive)", range=[0, 1], tickvals=[0, .25, .5, .75, 1], gridcolor="rgba(200,200,200,0.3)", zeroline=False),
+            yaxis=dict(title="Energy (calm → intense)",       range=[0, 1], tickvals=[0, .25, .5, .75, 1], gridcolor="rgba(200,200,200,0.3)", zeroline=False),
+            plot_bgcolor="rgba(250,250,252,1)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=60, r=20, t=60, b=60),
+            height=460,
+        )
+        fig.add_shape(type="line", x0=0.5, x1=0.5, y0=0, y1=1,   line=dict(color="rgba(150,150,150,0.5)", width=1, dash="dot"))
+        fig.add_shape(type="line", x0=0,   x1=1,   y0=0.5, y1=0.5, line=dict(color="rgba(150,150,150,0.5)", width=1, dash="dot"))
+
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"⭐ = your target (intent: **{intent_display}**) · numbered circles = recommended songs")
+
     # Analysis
     with st.expander("Analysis — How we interpreted your request", expanded=False):
-        analysis = result["analysis"]
         prefs = analysis["user_prefs"]
         st.markdown(f"**Reasoning:** {analysis['reasoning']}")
         st.markdown(f"**Confidence:** {analysis['confidence']:.0%}")
+        st.markdown(f"**Emotion Intent:** `{analysis.get('emotion_intent', 'match')}`")
         st.markdown("**Detected Preferences:**")
         pref_col1, pref_col2 = st.columns(2)
         with pref_col1:

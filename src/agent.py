@@ -53,16 +53,18 @@ DATA_PATH = Path(__file__).parent.parent / "data" / "songs.csv"
 # ── Safe defaults used when ANALYZE JSON parsing fails completely ─────────────
 
 _ANALYZE_FALLBACK_PREFS = {
-    "genre":               "lofi",
-    "mood":                "chill",
-    "current_genre":       "lofi",
-    "current_mood":        "chill",
-    "target_energy":       0.30,
+    "genre":               "pop",
+    "mood":                "relaxed",
+    "current_genre":       "pop",
+    "current_mood":        "relaxed",
+    "target_energy":       0.50,
     "target_valence":      0.50,
-    "target_danceability": 0.40,
-    "target_acousticness": 0.70,
-    "target_tempo":        85.0,
+    "target_danceability": 0.50,
+    "target_acousticness": 0.50,
+    "target_tempo":        110.0,
 }
+_ANALYZE_FALLBACK_INTENT = "match"
+VALID_INTENTS = {"match", "uplift", "energize", "calm", "contrast"}
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -136,9 +138,10 @@ def _parse_json_with_retry(
             print(f"[{step_label}] JSON parse failed twice — using fallback.")
             if step_label == "ANALYZE":
                 return {
-                    "user_prefs": _ANALYZE_FALLBACK_PREFS,
-                    "reasoning":  "Failed to parse LLM response; using safe defaults.",
-                    "confidence": 0.0,
+                    "user_prefs":     _ANALYZE_FALLBACK_PREFS,
+                    "emotion_intent": _ANALYZE_FALLBACK_INTENT,
+                    "reasoning":      "Failed to parse LLM response; using safe defaults.",
+                    "confidence":     0.0,
                 }
             # CORRECT fallback: approve everything
             return {
@@ -164,19 +167,39 @@ def _nearest_vocab(value: str, vocab: list[str], default: str) -> str:
     return default
 
 
+def _apply_intent_nudge(user_prefs: dict, emotion_intent: str) -> dict:
+    prefs = dict(user_prefs)
+    if emotion_intent == "uplift":
+        prefs["target_valence"] = _clamp(prefs["target_valence"] + 0.15, 0.0, 1.0)
+        prefs["target_energy"]  = _clamp(prefs["target_energy"]  + 0.10, 0.0, 1.0)
+    elif emotion_intent == "energize":
+        prefs["target_energy"]  = _clamp(prefs["target_energy"]  + 0.15, 0.0, 1.0)
+        if prefs["target_tempo"] < 120.0:
+            prefs["target_tempo"] = _clamp(prefs["target_tempo"] + 20.0, 50.0, 200.0)
+    elif emotion_intent == "calm":
+        prefs["target_energy"]  = _clamp(prefs["target_energy"]  - 0.15, 0.0, 1.0)
+        prefs["target_valence"] = _clamp(prefs["target_valence"] + 0.05, 0.0, 1.0)
+        if prefs["target_tempo"] > 100.0:
+            prefs["target_tempo"] = _clamp(prefs["target_tempo"] - 15.0, 50.0, 200.0)
+    elif emotion_intent == "contrast":
+        prefs["target_valence"] = _clamp(1.0 - prefs["target_valence"], 0.0, 1.0)
+        prefs["target_energy"]  = _clamp(1.0 - prefs["target_energy"],  0.0, 1.0)
+    return prefs
+
+
 # ── Public pipeline functions ─────────────────────────────────────────────────
 
 def analyze_prompt(
     user_prompt: str,
     client: anthropic.Anthropic,
-) -> tuple[dict, str, float]:
+) -> tuple[dict, str, float, str]:
     """
     STEP 1 — ANALYZE (LLM Call #1).
 
     Translate a natural-language prompt into a user_prefs dict that
     recommend_songs() can consume directly.
 
-    Returns: (user_prefs, reasoning, confidence)
+    Returns: (user_prefs, reasoning, confidence, emotion_intent)
     """
     system = ANALYZE_SYSTEM_PROMPT.format(
         genres=", ".join(KNOWN_GENRES),
@@ -191,6 +214,11 @@ def analyze_prompt(
     reasoning  = parsed.get("reasoning", "")
     confidence = _clamp(float(parsed.get("confidence", 0.0)), 0.0, 1.0)
 
+    raw_intent = parsed.get("emotion_intent", "match")
+    emotion_intent = raw_intent if raw_intent in VALID_INTENTS else "match"
+    if raw_intent not in VALID_INTENTS:
+        print(f"[WARN]    emotion_intent '{raw_intent}' not valid — defaulting to 'match'")
+
     # Validate and sanitise every field
     user_prefs = {
         "genre":               _nearest_vocab(prefs_raw.get("genre",         "lofi"),  KNOWN_GENRES, "electronic"),
@@ -204,6 +232,9 @@ def analyze_prompt(
         "target_tempo":        _clamp(float(prefs_raw.get("target_tempo",        85.0)), 50.0, 200.0),
     }
 
+    # Apply intent-driven nudges to numeric targets
+    user_prefs = _apply_intent_nudge(user_prefs, emotion_intent)
+
     print(f"[ANALYZE] genre={user_prefs['genre']}  mood={user_prefs['mood']}  "
           f"current_genre={user_prefs['current_genre']}  current_mood={user_prefs['current_mood']}")
     print(f"[ANALYZE] energy={user_prefs['target_energy']:.2f}  "
@@ -211,10 +242,10 @@ def analyze_prompt(
           f"dance={user_prefs['target_danceability']:.2f}  "
           f"acoustic={user_prefs['target_acousticness']:.2f}  "
           f"tempo={user_prefs['target_tempo']:.0f} bpm")
+    print(f"[ANALYZE] emotion_intent={emotion_intent}  confidence={confidence:.2f}")
     print(f"[ANALYZE] reasoning: \"{reasoning}\"")
-    print(f"[ANALYZE] confidence: {confidence:.2f}")
 
-    return user_prefs, reasoning, confidence
+    return user_prefs, reasoning, confidence, emotion_intent
 
 
 def draft_playlist(
@@ -355,7 +386,7 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
 
     # ── Step 1: ANALYZE ────────────────────────────────────────────────────────
     print("--- STEP 1: ANALYZE (LLM Call #1) ---")
-    user_prefs, reasoning, confidence = analyze_prompt(user_prompt, client)
+    user_prefs, reasoning, confidence, emotion_intent = analyze_prompt(user_prompt, client)
 
     # ── Step 2: DRAFT ──────────────────────────────────────────────────────────
     print("\n--- STEP 2: DRAFT (Rule Engine) ---")
@@ -386,9 +417,10 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     return {
         "user_prompt": user_prompt,
         "analysis": {
-            "user_prefs": user_prefs,
-            "reasoning":  reasoning,
-            "confidence": confidence,
+            "user_prefs":     user_prefs,
+            "reasoning":      reasoning,
+            "confidence":     confidence,
+            "emotion_intent": emotion_intent,
         },
         "draft_playlist":   _serialise(draft),
         "final_playlist":   _serialise(final_playlist),

@@ -58,6 +58,7 @@ Required JSON schema:
     "target_acousticness": <float 0.0-1.0>,
     "target_tempo":        <float 50.0-200.0>
   }},
+  "emotion_intent": "<match|uplift|energize|calm|contrast>",
   "reasoning": "<1-2 sentence explanation of your choices>",
   "confidence": <float 0.0-1.0>
 }}
@@ -72,6 +73,12 @@ Field meanings:
   target_danceability — 0.0 = not danceable, 1.0 = very danceable
   target_acousticness — 0.0 = fully electronic, 1.0 = fully acoustic
   target_tempo   — beats per minute (raw BPM, not normalised)
+  emotion_intent — what the music should do relative to the user's state:
+                   match    → mirrors current mood (sad stays sad)
+                   uplift   → shifts mood toward positive/hopeful
+                   energize → increases energy/motivation
+                   calm     → reduces stress/anxiety
+                   contrast → explicitly opposite of current state
   confidence     — how clearly the prompt maps to music features
                    (< 0.6 for ambiguous or very short prompts)
 
@@ -81,8 +88,25 @@ Allowed genre values (use ONLY these):
 Allowed mood values (use ONLY these):
 {moods}
 
-When the prompt is vague or short, default toward:
-  genre="lofi", mood="chill", target_energy=0.30, target_tempo=85.0
+Emotion intent rules — determine intent first, then set numeric targets:
+
+  match    → "I'm sad / feeling down / melancholic night":
+               mood=sad/melancholic, target_valence=0.15-0.35, target_energy=0.20-0.45
+               Genres: indie, folk, blues, ballad, soul, jazz — NOT always lofi
+  uplift   → "cheer me up / lift my spirits / make me feel better":
+               mood=hopeful/uplifting, target_valence=0.60-0.85, target_energy=0.50-0.75
+               Genres: pop, soul, r&b, gospel, reggae, folk
+  energize → "pump me up / workout / hype / motivate me":
+               mood=energetic/empowered, target_energy=0.70-1.0, target_tempo=120-180
+               Genres: rock, hip-hop, electronic, funk, techno, punk
+  calm     → "calm me down / relax / de-stress / unwind":
+               mood=peaceful/relaxed, target_energy=0.10-0.35, target_tempo=60-95
+               Genres: ambient, classical, jazz, bossa nova, folk, lofi
+  contrast → explicit opposite ("something upbeat even though I'm sad")
+
+  When vague with no emotional direction: intent=match, infer from context clues.
+  Do NOT default to lofi/chill — pick the most neutral reading of the prompt.
+  Set confidence < 0.55 to signal ambiguity.
 """
 
 ANALYZE_USER_TEMPLATE = """\
