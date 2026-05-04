@@ -1,11 +1,48 @@
-# Visualization Instructions for Music Recommender Scoring Formula
+# Visualization Instructions for MoodSync Scoring Formula
 
 ## Overview
-Generate interactive visualizations that show how the music recommendation scoring formula calculates a recommendation score. Focus on showing:
+Generate interactive visualizations that show how the music recommendation scoring formula calculates a recommendation score. These visualizations apply regardless of the data source — the same formula is used whether songs come from the default 35-song CSV catalog or a live Spotify candidate pool.
+
+Focus on showing:
 1. Component interactions (categorical vs. numeric features)
 2. Weight distribution and their impact
 3. Step-by-step calculation flow
 4. Sensitivity analysis (how changes in inputs affect output)
+
+**Data source note:** Sample data below uses songs from `data/songs.csv`. When Spotify integration is active, the same formula and visualization logic applies — substitute Spotify-sourced song dicts (same schema) for CSV rows.
+
+---
+
+## Visualization 0: End-to-End Flow (User Prompt → Final Output)
+
+### Description
+A simple flowchart tracing the full journey from user input to ranked playlist output.
+
+### Mermaid Diagram
+
+```mermaid
+flowchart TD
+    A([User Prompt\ngenre · mood · energy · valence\ndanceability · acousticness · tempo]) --> B[Load Song Catalog\nCSV or Spotify candidates]
+
+    B --> C{For each song}
+
+    C --> D[Categorical Score\ngenre_match · mood_match\nweighted 0.33 / 0.67]
+    C --> E[Genre Gate\n1.00 exact · 0.50 family · 0.25 foreign]
+    C --> F[Numeric Score\nenergy · valence · danceability\nacousticness · tempo\nweights: 0.35 · 0.25 · 0.25 · 0.10 · 0.05]
+
+    E --> F
+
+    D --> G[Final Score\n0.40 × Categorical + 0.60 × Numeric]
+    F --> G
+
+    G --> H[Sort all songs\nby raw score descending]
+
+    H --> I[Apply Variety Penalties\n−0.15 repeat genre\n−0.15 repeat mood\nmax penalty −0.30]
+
+    I --> J[Select Top-N Songs\nby effective score]
+
+    J --> K([Ranked Playlist Output\nTitle · Artist · Score · Genre · Mood])
+```
 
 ---
 

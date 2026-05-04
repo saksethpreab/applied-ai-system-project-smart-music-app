@@ -1,88 +1,92 @@
-# 🎧 Model Card: Music Recommender Simulation
+# Model Card: MoodSync — Agentic Smart Music Recommender
 
-## 1. Model Name  
+## 1. Model Name
 
 **MoodSync 1.0**
 
 ---
 
-## 2. Intended Use  
+## 2. Intended Use
 
-MoodSync 1.0 scores songs from a 35-song catalog and returns a ranked top-5 playlist for a given user.
+MoodSync 1.0 accepts a natural language listening request (e.g., "something chill for late-night studying" or "pump me up for a morning run") and returns a ranked 5-song playlist with per-song explanations.
 
-It assumes the user has a known favorite genre, a favorite mood, and numeric targets for energy, valence, danceability, acousticness, and tempo. It also tracks what the user listened to recently as a separate session signal alongside their all-time preferences.
-
-This system is built for classroom exploration. It is not connected to real streaming data and does not learn from user behavior.
+The system is built for classroom exploration of applied AI engineering. It demonstrates how a rule-based scoring engine and an LLM-powered agentic pipeline can be combined to produce explainable, reliable recommendations. It is not connected to real user listening history and does not learn from behavior.
 
 ---
 
-## 3. How the Model Works  
+## 3. How the Model Works
 
-Every song gets a score between 0 and 1. Higher is a better match for the user.
+The system runs a three-step Plan-Act-Check pipeline.
 
-The score has two parts. The first part is categorical — it checks how well the song's genre and mood match what the user likes. An exact genre match scores higher than a related genre, which scores higher than a completely different one. Mood works the same way. The user's current session and their long-time history both contribute equally to this part.
+**Step 1 — Plan (Claude LLM, `claude-haiku-4-5`)**
 
-The second part is numeric — it measures how close the song's energy, mood tone, danceability, acousticness, and tempo are to the user's targets. If they are far apart, the similarity is low. If they are close, the similarity is high.
+The user's natural language prompt is analyzed by Claude to produce a structured preference profile: `genre`, `mood`, `current_genre`, `current_mood`, numeric targets (`target_energy`, `target_valence`, `target_danceability`, `target_acousticness`, `target_tempo`), and an `emotion_intent` signal (match / uplift / energize / calm / contrast). The intent signal nudges numeric targets before scoring — for example, "uplift" increases `target_valence` and `target_energy`.
 
-Before the numeric part is counted, a genre gate is applied. If the song's genre is completely foreign to the user's preference, its numeric score is cut to 25% of its value. This stops a high-energy hip-hop track from outscoring a rock song for a rock user just because the energy values happen to be similar.
+**Step 2 — Act (rule engine)**
 
-The final score is 40% from the categorical part and 60% from the numeric part.
+Every song in the catalog is scored 0–1 using a deterministic formula:
 
-After scoring, a re-ranker checks consecutive picks and applies a small penalty if two songs in a row share the same genre or mood. This spreads the playlist without changing which songs qualified.
+- **Categorical score (40%):** Genre and mood are matched against both the user's long-term preference and current session signal (50/50 blend). Matching uses a family-proximity function: exact match = 1.0, same family = 0.5, unrelated = 0.0.
+- **Numeric score (60%):** Five audio features are compared to user targets using `1 − |song_value − target|`. A `genre_gate` multiplier (1.0 / 0.5 / 0.25) caps how much a genre-foreign song can contribute to the numeric component.
+- **Variety re-ranking:** A greedy re-ranker selects the final 5 one at a time, applying −0.15 penalties for consecutive same-genre or same-mood picks (max −0.30).
 
-The original system used only one genre and mood signal with binary matching (exact match or zero credit), no session awareness, and no genre gate. Valence, danceability, acousticness, and tempo were not scored.
+**Step 3 — Check (Claude LLM)**
 
----
+Claude reviews the 5 draft songs against the original prompt. Songs with clear mismatches (`keep=false`) are replaced by the rule engine from the remaining catalog. The final playlist is returned with per-song `fit_score` and `fit_reason`.
 
-## 4. Data  
-
-The catalog contains 35 songs.
-
-Genres represented include pop, rock, metal, punk, hip-hop, electronic, synthwave, techno, lofi, ambient, indie, folk, classical, r&b, soul, disco, latin, and jazz. Moods include happy, sad, energetic, intense, angry, relaxed, chill, dreamy, focused, moody, melancholic, romantic, and peaceful.
-
-The original dataset was expanded with additional songs. New numeric fields were added to each song: valence, danceability, acousticness, and tempo in BPM.
-
-About 51% of songs are high-energy (energy 0.7–1.0), so low-energy users have fewer candidates. Only 3 songs are in the rock genre. Classical, gospel, and folk are underrepresented. There are no songs that combine high energy with a sad or focused mood, which makes certain user profiles hard to serve well.
+**Security guardrails:** User prompts are wrapped in `<user_input>` trust-boundary tags before insertion into LLM templates, preventing prompt injection. A 500-character length limit is enforced before any API call. Extracted preference fields are validated and clamped post-LLM-response.
 
 ---
 
-## 5. Strengths  
+## 4. Data
 
-The system works best when the user's preferred genre and mood are well-represented in the catalog.
+### Default Catalog
 
-High-energy pop users get clean, intuitive results. All top-5 picks are pop or pop-family songs with matching energy and mood. Chill lofi users also get accurate results — low-energy lofi songs rank above ambient songs once the genre gate is applied.
+301 hand-curated songs with manually assigned audio features. Genres include pop, rock, metal, punk, hip-hop, electronic, synthwave, techno, lofi, ambient, indie, folk, classical, r&b, soul, disco, latin, and jazz. Moods include happy, sad, energetic, intense, angry, relaxed, chill, dreamy, focused, moody, melancholic, romantic, and peaceful.
 
-Proximity matching surfaces related genres and moods instead of returning nothing when an exact match is unavailable. A lofi user will still see ambient and synthwave songs in the list, not just exact lofi tracks.
+About 51% of songs are high-energy (energy 0.7–1.0), so low-energy users have fewer viable candidates. Only 3 songs are in the rock genre. Classical, gospel, and folk are underrepresented.
 
-Session awareness means the system can shift recommendations based on what the user is listening to right now, without fully overriding their long-term taste.
+### Spotify Catalog (optional)
 
-Every recommendation is fully explainable. Each score can be broken down into its exact categorical and numeric contributions by hand.
+When Spotify credentials are configured, the system fetches up to 100 candidate tracks per request using the analyzed genre and mood as search parameters. Audio features are pulled from Spotify's API. Artist genre tags are translated to the project's vocabulary via a pre-generated mapping (`data/spotify_genre_map.json`). Mood is inferred from `valence + energy` quadrants. The CSV catalog serves as a fallback.
 
 ---
 
-## 6. Limitations and Bias 
+## 5. Strengths
+
+**Fully explainable.** Every score is traceable to a hand-coded formula. No learned parameters.
+
+**Natural language input.** The LLM Plan step removes the need for users to specify numeric targets. A vague prompt like "something for a sad Sunday morning" produces a complete preference profile.
+
+**Self-correcting.** The Check step catches cases where the rule engine surfaces songs that technically score well but don't match the spirit of the request.
+
+**Session-aware.** The 50/50 blend of long-term and session signals means a single off-genre listening session doesn't override established taste.
+
+**Prompt injection resistant.** Trust-boundary tags and length limits protect the LLM system instructions from user-controlled input.
+
+**Scalable catalog.** Spotify integration allows the same scoring formula to operate over millions of tracks rather than 35.
+
+---
+
+## 6. Limitations and Bias
 
 ### Bias 1 — Energy Dominance
 
-**Observed:** With W_ENERGY = 0.60, energy alone accounted for 36% of the final score. Because 51% of the catalog is high-energy (energy 0.7–1.0), low-energy users were systematically under-served. Songs with high energy could float to the top even when their mood and genre were a poor match.
+**Observed:** With W_ENERGY = 0.60, energy alone accounted for 36% of the final score. Because 51% of the catalog is high-energy, low-energy users were systematically under-served.
 
-**Fix:** Reduced W_ENERGY from 0.60 to 0.35. Redistributed weight to valence (0.25) and danceability (0.25). Energy remains the largest single numeric factor but no longer dominates.
-
----
+**Fix:** Reduced W_ENERGY from 0.60 to 0.35. Redistributed weight to valence (0.25) and danceability (0.25).
 
 ### Bias 2 — Session Filter Bubble
 
-**Observed:** W_SESSION = 0.70 meant a single off-genre listening session could lock recommendations into that session's genre, effectively erasing the user's long-term taste. One accidental playlist overrode all-time history.
+**Observed:** W_SESSION = 0.70 meant one off-genre session could lock recommendations into that session's genre.
 
-**Fix:** Rebalanced to W_LONG_TERM = 0.50 / W_SESSION = 0.50. Long-term and current session now contribute equally. A single session no longer dominates.
+**Fix:** Rebalanced to W_LONG_TERM = 0.50 / W_SESSION = 0.50.
 
----
+### Bias 3 — Genre Bleed
 
-### Bias 3 — Genre Bleed (No Genre Gate)
+**Observed:** Genre-foreign songs could outscore exact-genre matches purely on energy similarity.
 
-**Observed:** Genre-foreign songs could outscore exact-genre matches purely on energy similarity. A hip-hop song scored higher than a rock song for a rock user when their energy values aligned. The formula had no mechanism to penalize genre mismatch in the numeric component.
-
-**Fix:** Added a `genre_gate` multiplier to the numeric score. Songs with an exact genre match receive full credit (1.00), same-family songs receive half (0.50), and genre-foreign songs are capped at 0.25 (the floor). The floor is intentionally non-zero to preserve cross-genre discovery for users in under-represented genres (e.g., ambient, gospel, folk).
+**Fix:** Added `genre_gate` multiplier. Exact match = 1.00, same family = 0.50, foreign = 0.25 floor.
 
 | Genre relationship | Gate | Max numeric contribution |
 |---|---|---|
@@ -90,84 +94,72 @@ Every recommendation is fully explainable. Each score can be broken down into it
 | Same family | 0.50 | 30% |
 | Foreign genre | 0.25 | 15% |
 
----
+### Bias 4 — Mood Conflation
 
-### Bias 4 — Mood Conflation (Energetic vs. Intense)
+**Observed:** "energetic", "intense", and "angry" were grouped as equals. Workout users received angry metal at the same 0.5 proximity as upbeat pop.
 
-**Observed:** "energetic," "intense," and "angry" were grouped as equals in the same mood family. A user wanting energetic, upbeat music received angry metal recommendations at the same 0.5 proximity score as upbeat pop — treating fundamentally different emotional states as equivalent.
+**Fix:** Split "energetic" into a singleton family. Angry/intense songs receive 0.0 proximity toward energetic users.
 
-**Fix:** Split the family. "energetic" is now a singleton with no proximity neighbors. "intense" and "angry" remain in the same family but are completely separate from "energetic." Angry and intense songs no longer receive partial credit toward energetic user profiles.
+### Bias 5 — Weak Variety Penalty
 
----
+**Observed:** −0.10/−0.10 max penalty of −0.20 couldn't break catalog score gaps that routinely exceeded 0.20.
 
-### Bias 5 — Variety Re-ranker Penalty Too Weak
-
-**Observed:** The original max penalty of −0.20 (−0.10 per repeated genre + −0.10 per repeated mood) could not break score gaps exceeding 0.20. In practice, catalog gaps reached 0.25+, meaning the variety re-ranker had no effect on playlists with high-scoring songs of the same genre or mood.
-
-**Fix:** Raised each penalty from −0.10 to −0.15 (max −0.30 combined). Scores are clamped at 0.0 to keep all outputs in [0.0, 1.0].
-
----
+**Fix:** Raised each penalty to −0.15 (max −0.30). Scores clamped at 0.0.
 
 ### Residual Limitations
 
-- **Contradictory profiles cannot be resolved.** High energy + sad mood is an inherently conflicting signal. The formula averages conflicting features rather than resolving them. Punk Energy (rock/angry) can still surface for an electronic/sad user when energy similarity is high.
-- **Genre floor allows residual bleed.** The GENRE_FLOOR = 0.25 minimum means genre-foreign songs are never fully excluded. A rock user can still see hip-hop at position 4–5 if numeric similarity is strong.
-- **Small catalog skew.** 35 songs with 51% high-energy tracks and only 3 rock songs. Under-represented genres have fewer candidates regardless of how well the formula scores them.
-- **No content understanding.** Lyrics, instrumentation, time of day, and listening context are fully ignored.
+- **Linear similarity.** `1 − |song − target|` doesn't model perceptual non-linearity in musical features.
+- **Mood inference from audio features.** Mood from Spotify is inferred via valence/energy quadrants — imprecise for edge cases.
+- **Contradictory profiles.** High energy + sad mood is an unresolvable conflict; the formula averages the signals.
+- **Genre floor allows residual bleed.** GENRE_FLOOR = 0.25 means genre-foreign songs appear at positions 4–5 for users with well-represented genres.
+- **No content understanding.** Lyrics, language, instrumentation, and context are fully ignored.
+- **Non-deterministic Check step.** Claude's self-correction is probabilistic; the same draft may produce different rejections across runs.
 
 ---
 
-## 7. Evaluation  
+## 7. Evaluation
 
-Six user profiles were tested by running `python -m src.recommender` and inspecting the top-5 output for each. For each profile, the expectation was that the top results would share the user's genre and mood, and that numeric features (energy, valence, danceability) would be close to the user's targets.
-
-### Profiles Tested
+Six user profiles were tested by inspecting top-5 output for each. For each profile, the expectation was that top results would share the user's genre and mood, and that numeric features would be close to targets.
 
 | Profile | Genre | Mood | Outcome |
 |---|---|---|---|
 | High-Energy Pop | pop | happy | Clean results — exact genre/mood matches dominated top 5 |
-| Chill Lofi | lofi | relaxed | Clean results — low-energy ambient/lofi songs ranked first |
-| Deep Intense Rock | rock | intense | Genre bleed: hip-hop (Urban Beats) scored 0.709 before fix |
-| High-Energy Sadness | electronic | sad | Contradictory profile: punk/rock surfaced due to energy match |
-| Acoustic Intensity | rock | intense | Exact match ranked last due to acousticness penalty stacking |
-| Relaxed Workout | pop | relaxed | Angry metal appeared before mood-family fix |
+| Chill Lofi | lofi | relaxed | Clean results — exact-lofi songs ranked above ambient after genre gate |
+| Deep Intense Rock | rock | intense | Urban Beats (hip-hop) dropped from 0.709 → 0.175 after genre gate |
+| High-Energy Sadness | electronic | sad | Punk/rock songs removed after genre gate + mood split |
+| Acoustic Intensity | rock | intense | Storm Runner: rank 5 (0.025) → rank 1 (0.829) after all fixes |
+| Relaxed Workout | pop | relaxed | Angry metal removed after mood family split |
 
-### Surprising Results
+**Most dramatic result:** Storm Runner (exact rock/intense match) ranked last at 0.025 effective score before fixes. A single acoustic feature mismatch dragged its raw score below genre-foreign competitors, and the variety re-ranker added a further −0.20 penalty. After fixes, Storm Runner ranks first at 0.829 — a +0.804 score increase and +4 rank gain.
 
-**Exact match ranked last (Acoustic Intensity).** Stone Runner had exact rock/intense genre and mood — the best possible categorical match. Yet it ranked last before fixes. The cause: acousticness 0.18 against a user target of 0.92 produced a similarity of only 0.26, pushing it down in raw scoring. The variety re-ranker then added an additional −0.20 penalty for repeated genre/mood. A perfect categorical match was punished to the bottom because one numeric feature was far off. After fixes, Stone Runner ranks first at score 0.829.
-
-**Energy overrode genre entirely (Deep Intense Rock).** Urban Beats (hip-hop) scored 0.709 for a rock user — higher than most rock songs in the catalog. The genre was completely different, but the energy value was close enough to the target that the numeric component dominated. The formula had no gate to cap how much a genre-foreign song could contribute. After the genre-gate fix, Urban Beats dropped to an effective score of 0.175.
-
-**Contradictory profile cannot be resolved (High-Energy Sadness).** High energy + sad mood is an internally conflicting signal — most high-energy songs are also high-valence (happy). The system surfaces Punk Energy (rock/angry) because its energy similarity (0.98 vs 0.90 target) is very high and the formula has no concept of "this combination doesn't make sense." After the genre-gate fix, rock songs disappeared from this profile's results, but the underlying contradiction remains unresolvable.
-
-**Angry metal for a workout user (Relaxed Workout).** Before the mood-family split, "energetic" and "angry/intense" were grouped as equals. A user wanting upbeat workout music received metal recommendations at 0.5 mood proximity — the same score as upbeat pop. After splitting energetic into a singleton family, angry and intense songs received 0.0 proximity toward energetic users.
-
-### Tests Run
-
-The test suite in `tests/test_recommender.py` contains 8 tests covering both the OOP and functional interfaces. Tests verify: result count equals k, all scores are in [0.0, 1.0], and explanations are non-empty strings. All 8 tests pass after all fixes. No ranking-order assertions exist in the test suite, so weight changes did not break any tests.
+All 8 unit tests in `tests/test_recommender.py` pass after all fixes.
 
 ---
 
-## 8. Future Work  
+## 8. Future Work
 
-Add more songs, especially in underrepresented genres like rock, classical, gospel, and folk.
-
-Allow numeric targets to update automatically from listening history instead of being hardcoded. The current session window logic exists for genre and mood but not for energy, valence, or danceability.
-
-Show per-feature score breakdowns in the output so users can see exactly which features helped or hurt each recommendation.
-
-Add genre and mood diversity quotas across the full top-k results so variety is guaranteed, not just re-ranked.
-
-Add context signals — time of day, activity type, or session energy trend. A user's energy target at 7 AM before a run is different from the same user at 11 PM.
-
-Flag contradictory user profiles before scoring. A profile combining high energy and sad mood is internally conflicting. The system should surface a warning rather than silently averaging the signals.
+- **Adaptive weights.** Allow numeric weights to shift based on user feedback (thumbs up/skip), replacing fixed weights with per-user profiles.
+- **Richer mood inference.** Move beyond the 5-region valence/energy heuristic — use genre context or additional audio features to assign more nuanced moods from Spotify data.
+- **Contradiction detection.** Flag inherently conflicting preference profiles (high energy + sad mood) before scoring rather than silently averaging.
+- **Artist diversity.** Add a variety penalty for consecutive songs by the same artist.
+- **Perceptual similarity function.** Replace linear `1 − |song − target|` with a non-linear curve that better matches human perception.
+- **Per-feature score breakdowns in UI.** Show users exactly which features helped or hurt each recommendation.
+- **Tests for security features.** Add unit tests for `_validate_user_prompt()` (length limit, stripping) and `_validate_analyze_output()` (out-of-range fields). Add integration tests for the Spotify genre mapping utility.
 
 ---
 
-## 9. Personal Reflection  
+## 9. Personal Reflection
 
-I learned that small weight choices have large downstream effects. Changing W_ENERGY from 0.35 to 0.60 was enough to let a hip-hop song outscore a rock song for a rock user, purely because their energy values were close. The formula looks precise, but it requires careful calibration to behave as intended.
+I learned that small weight choices have large downstream effects. Changing W_ENERGY from 0.35 to 0.60 was enough to let a hip-hop song outscore a rock song for a rock user purely because their energy values were close. The formula looks precise, but it requires careful calibration to behave as intended.
 
-The most surprising result was Storm Runner ranking last despite being the only exact genre and mood match in the Acoustic Intensity profile. I expected exact categorical matches to always rank near the top. Instead, a single mismatched numeric feature — acousticness — dragged its raw score down, and the variety re-ranker then applied an additional penalty that pushed it to near zero. Fixing the weights and genre gate was enough to move it from rank 5 to rank 1.
+The most surprising result was Storm Runner ranking last despite being the only exact genre and mood match in the Acoustic Intensity profile. A single mismatched numeric feature dragged its raw score down, and the variety re-ranker then compounded the penalty. Fixing the weights and genre gate moved it from rank 5 to rank 1.
 
-This changed how I think about apps like Spotify. Their system likely faces the same tradeoffs between categorical signals and numeric features, but with millions of parameters learned from listening data instead of six hand-coded weights. The biases I could observe and fix by hand in 35 songs are invisible in production systems — buried inside learned parameters that no one can directly read.
+Adding the LLM pipeline changed how I think about the system. The rule engine is fully auditable but requires a perfectly structured input. The LLM Plan step bridges the gap between vague human language and a structured numeric profile — but introduces non-determinism. The Check step adds a qualitative filter the formula alone cannot provide. The combination is more capable than either component alone, but harder to reason about end-to-end.
+
+This changed how I think about production recommenders like Spotify. Their system likely faces the same tradeoffs, but with millions of parameters learned from listening data instead of six hand-coded weights. The biases observable and fixable by hand in 301 songs are invisible in production systems — buried inside learned parameters that no one can directly read.
+
+The 35-song hand-coded catalog turned out to be one of the most valuable parts of the project for learning purposes. Because every song was manually curated with known feature values, I could predict exactly which song should rank where and verify the formula was behaving correctly. When Storm Runner ranked last despite being the perfect categorical match, I could trace the exact cause — acousticness similarity 0.26 — without ambiguity. A larger catalog would have made that kind of debugging nearly impossible. The small catalog forced precision: every bias had a clear, traceable example, and every fix had a measurable, verifiable result.
+
+That said, the catalog's limitations are just as clear. With only 301 songs and significant imbalances — 51% high-energy, just 3 rock songs, almost no classical or gospel — the system cannot serve many user profiles well regardless of how good the formula is. There simply aren't enough candidates in some genres and moods. The scoring logic is sound, but a good recommender ultimately depends on having enough songs to recommend. A real system would need a catalog orders of magnitude larger, with consistent and accurate audio feature data across all entries.
+
+This is why I hope to integrate the Spotify Web API as the next step. Spotify already provides the exact audio features this formula uses — energy, valence, danceability, acousticness, tempo — for millions of tracks. Rather than replacing the scoring engine, the Spotify integration would feed it a much richer candidate pool: up to 100 relevant tracks per request, fetched live based on the user's analyzed genre and mood. The formula, the genre gate, the variety re-ranker, and the Plan-Act-Check pipeline all remain unchanged. The only difference is the catalog stops being a bottleneck. The groundwork is already in place — the genre mapping utility, the translation layer, and the integration architecture are designed and ready. Completing the integration is the most impactful next step this project could take.
