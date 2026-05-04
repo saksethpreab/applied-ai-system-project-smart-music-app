@@ -4,6 +4,12 @@
 
 Evolve a foundational rule-based music recommender into a cohesive, end-to-end applied AI system that curates playlists from natural language prompts. The system must be reliable (guardrails, error handling, evaluation metrics), transparent (observable intermediate steps), and reproducible (clear documentation, consistent results).
 
+### Academic Goals (Foundations of AI Engineering Final Project)
+
+- **Reliability:** Built-in guardrails, JSON format enforcement, and evaluation metrics prove the AI's output is consistent and trustworthy.
+- **Transparency:** Observable intermediate steps (the AI's "thought process") demystify how recommendations are chosen.
+- **Reproducibility:** Clear documentation, setup instructions, and architectural diagrams allow anyone to clone the repo, run the code, and get consistent results.
+
 ---
 
 ## Architecture Overview

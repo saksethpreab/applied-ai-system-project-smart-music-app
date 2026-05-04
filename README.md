@@ -1,3 +1,6 @@
+# LOOM DEMO
+[Link](https://www.loom.com/share/9dd881e55c404108854b5d4459f6dbc1) 
+
 # MoodSync — Agentic Smart Music Recommender
 
 A music recommendation system that combines a **rule-based scoring engine** with a **Claude-powered agentic pipeline** to turn natural language prompts into ranked playlists. Every recommendation is fully explainable: each score is a deterministic, auditable formula with fixed weights.
