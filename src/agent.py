@@ -65,6 +65,7 @@ _ANALYZE_FALLBACK_PREFS = {
 }
 _ANALYZE_FALLBACK_INTENT = "match"
 VALID_INTENTS = {"match", "uplift", "energize", "calm", "contrast"}
+MAX_PROMPT_LENGTH = 500
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -187,6 +188,34 @@ def _apply_intent_nudge(user_prefs: dict, emotion_intent: str) -> dict:
     return prefs
 
 
+def _validate_user_prompt(user_prompt: str) -> str:
+    user_prompt = user_prompt.strip()
+    if len(user_prompt) > MAX_PROMPT_LENGTH:
+        raise ValueError(
+            f"Prompt too long ({len(user_prompt)} chars). "
+            f"Please keep your request under {MAX_PROMPT_LENGTH} characters."
+        )
+    return user_prompt
+
+
+def _validate_analyze_output(user_prefs: dict, emotion_intent: str) -> None:
+    for field in ("genre", "current_genre"):
+        if user_prefs.get(field) not in KNOWN_GENRES:
+            print(f"[SECURITY] {field}='{user_prefs.get(field)}' not in KNOWN_GENRES after sanitisation")
+    for field in ("mood", "current_mood"):
+        if user_prefs.get(field) not in KNOWN_MOODS:
+            print(f"[SECURITY] {field}='{user_prefs.get(field)}' not in KNOWN_MOODS after sanitisation")
+    for field in ("target_energy", "target_valence", "target_danceability", "target_acousticness"):
+        v = user_prefs.get(field, 0.0)
+        if not (0.0 <= v <= 1.0):
+            print(f"[SECURITY] {field}={v} out of [0.0, 1.0] after clamping")
+    tempo = user_prefs.get("target_tempo", 110.0)
+    if not (50.0 <= tempo <= 200.0):
+        print(f"[SECURITY] target_tempo={tempo} out of [50.0, 200.0] after clamping")
+    if emotion_intent not in VALID_INTENTS:
+        print(f"[SECURITY] emotion_intent='{emotion_intent}' not in VALID_INTENTS after sanitisation")
+
+
 # ── Public pipeline functions ─────────────────────────────────────────────────
 
 def analyze_prompt(
@@ -234,6 +263,7 @@ def analyze_prompt(
 
     # Apply intent-driven nudges to numeric targets
     user_prefs = _apply_intent_nudge(user_prefs, emotion_intent)
+    _validate_analyze_output(user_prefs, emotion_intent)
 
     print(f"[ANALYZE] genre={user_prefs['genre']}  mood={user_prefs['mood']}  "
           f"current_genre={user_prefs['current_genre']}  current_mood={user_prefs['current_mood']}")
@@ -379,6 +409,7 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     Returns a dict with keys:
         user_prompt, analysis, draft_playlist, final_playlist, metrics
     """
+    user_prompt = _validate_user_prompt(user_prompt)
     print(f'\n[AGENT] Starting pipeline for: "{user_prompt}"\n')
 
     client = _build_client()
