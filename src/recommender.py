@@ -158,8 +158,44 @@ def _score_song_dict(song: dict, user: dict) -> float:
     return W_CAT * categorical_score + W_NUM * numeric_score
 
 
-def _explain_dict(song: dict, user: dict, score: float) -> str:
-    """Generate explanation for song recommendation (functional interface)."""
+def _explain_dict(song: dict, user: dict, _score: float) -> str:
+    """Natural-language explanation for why a song was recommended."""
+    genre_m = _family_match(song["genre"], user["current_genre"], GENRE_FAMILIES)
+    mood_m  = _family_match(song["mood"],  user["current_mood"],  MOOD_FAMILIES)
+
+    if genre_m == 1.0:
+        genre_phrase = f"fits your {song['genre']} preference"
+    elif genre_m == 0.5:
+        genre_phrase = f"is a {song['genre']} pick adjacent to your {user['current_genre']} taste"
+    else:
+        genre_phrase = f"ventures outside your usual {user['current_genre']} into {song['genre']}"
+
+    if mood_m == 1.0:
+        mood_phrase = f"matches your {song['mood']} mood"
+    elif mood_m == 0.5:
+        mood_phrase = f"carries a related {song['mood']} feel"
+    else:
+        mood_phrase = f"offers a {song['mood']} contrast to your current mood"
+
+    energy = song["energy"]
+    energy_word = "high-energy" if energy > 0.66 else ("mid-energy" if energy > 0.33 else "laid-back")
+
+    acoustic_word = (
+        "acoustic" if song["acousticness"] > 0.6 else
+        ("lightly produced" if song["acousticness"] > 0.3 else "fully produced")
+    )
+
+    bpm = song["tempo_bpm"]
+    tempo_word = "fast" if bpm > 130 else ("medium-tempo" if bpm > 95 else "slow")
+
+    return (
+        f"This {song['genre']} track {genre_phrase} and {mood_phrase}. "
+        f"Expect a {energy_word}, {acoustic_word} sound at a {tempo_word} pace ({bpm:.0f} BPM)."
+    )
+
+
+def _explain_numeric(song: dict, user: dict, score: float) -> str:
+    """Numeric breakdown explanation for deeper inspection."""
     genre_cur_m = _family_match(song["genre"], user["current_genre"], GENRE_FAMILIES)
     mood_cur_m  = _family_match(song["mood"],  user["current_mood"],  MOOD_FAMILIES)
     genre_label = "exact" if genre_cur_m == 1.0 else ("close" if genre_cur_m == 0.5 else "different")
@@ -173,8 +209,8 @@ def _explain_dict(song: dict, user: dict, score: float) -> str:
     return (
         f"Genre {genre_label} ({song['genre']} / {user['current_genre']}), "
         f"mood {mood_label} ({song['mood']} / {user['current_mood']}). "
-        f"Energy: {energy_sim:.2f}, Valence: {valence_sim:.2f}, "
-        f"Dance: {dance_sim:.2f}, Acoustic: {acoustic_sim:.2f}. "
+        f"Energy sim: {energy_sim:.2f}, Valence sim: {valence_sim:.2f}, "
+        f"Dance sim: {dance_sim:.2f}, Acoustic sim: {acoustic_sim:.2f}. "
         f"Score: {score:.3f}"
     )
 
@@ -192,7 +228,7 @@ def _apply_variety_ranking(scored: list) -> list:
             if sc + adj > best_eff:
                 best_eff, best_idx = sc + adj, i
         s, sc, ex = pool.pop(best_idx)
-        ranked.append((s, max(best_eff, 0.0), ex))
+        ranked.append((s, sc, ex))
         last_genre, last_mood = s["genre"], s["mood"]
     return ranked
 
@@ -208,12 +244,14 @@ class Recommender:
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
         """Return top k songs recommended for the user."""
-        scored = sorted(
-            self.songs,
-            key=lambda s: _score_song(s, user),
-            reverse=True,
+        song_map = {s.id: s for s in self.songs}
+        as_dicts = sorted(
+            [({"id": s.id, "genre": s.genre, "mood": s.mood}, _score_song(s, user), "")
+             for s in self.songs],
+            key=lambda x: x[1], reverse=True,
         )
-        return scored[:k]
+        ranked = _apply_variety_ranking(as_dicts)
+        return [song_map[d["id"]] for d, _, _ in ranked[:k]]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         """Generate explanation for why a song is recommended."""
@@ -261,13 +299,8 @@ def load_songs(csv_path: str) -> List[Dict]:
 
 
 def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
-    """
-    Scores a single song against user preferences.
-    Required by recommend_songs() and src/main.py
-    """
-    # TODO: Implement scoring logic using your Algorithm Recipe from Phase 2.
-    # Expected return format: (score, reasons)
-    return []
+    score = _score_song_dict(song, user_prefs)
+    return score, [_explain_dict(song, user_prefs, score)]
 
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, seen_ids: set = None) -> List[Tuple[Dict, float, str]]:
     """
@@ -284,7 +317,8 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, seen_ids: s
     for song in catalog:
         score       = _score_song_dict(song, user_prefs)
         explanation = _explain_dict(song, user_prefs, score)
-        scored.append((song, score, explanation))
+        song_copy   = {**song, "_numeric_explanation": _explain_numeric(song, user_prefs, score)}
+        scored.append((song_copy, score, explanation))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     ranked = _apply_variety_ranking(scored)

@@ -1,4 +1,6 @@
+import logging
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -7,6 +9,9 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 from agent import refresh_playlist
+
+logger = logging.getLogger(__name__)
+_MAX_REQUESTS_PER_MINUTE = 10
 
 st.set_page_config(
     page_title="MoodSync",
@@ -19,6 +24,7 @@ for key, default in [
     ("last_prompt", None),
     ("error", None),
     ("session", {}),   # maps prompt string -> set of seen song IDs
+    ("request_times", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -50,7 +56,20 @@ refresh_button = col_refresh.button(
 
 # ── Run logic ─────────────────────────────────────────────────────────────────
 
+def _check_rate_limit() -> bool:
+    now = time.time()
+    window = [t for t in st.session_state.get("request_times", []) if now - t < 60]
+    if len(window) >= _MAX_REQUESTS_PER_MINUTE:
+        return False
+    window.append(now)
+    st.session_state["request_times"] = window
+    return True
+
+
 def _run(prompt: str, fresh: bool) -> None:
+    if not _check_rate_limit():
+        st.session_state["error"] = "Too many requests — please wait a moment before trying again."
+        return
     st.session_state["error"] = None
     if fresh:
         st.session_state["session"].pop(prompt, None)   # clear history → new search
@@ -65,8 +84,9 @@ def _run(prompt: str, fresh: bool) -> None:
     except RuntimeError as e:
         st.session_state["error"] = f"Pipeline error: {e}"
         st.session_state["result"] = None
-    except Exception as e:
-        st.session_state["error"] = f"Unexpected error: {e}"
+    except Exception:
+        logger.exception("Unexpected pipeline error for prompt: %r", prompt)
+        st.session_state["error"] = "An unexpected error occurred. Please try again."
         st.session_state["result"] = None
 
 if run_button and user_prompt.strip():
@@ -119,6 +139,9 @@ if st.session_state["result"] is not None:
             col_score.metric(label="Score", value=f"{song['score']:.3f}")
             with st.expander("Why this song?"):
                 st.write(song["explanation"])
+                if song.get("explanation_numeric"):
+                    with st.expander("Deeper Dive — numeric breakdown"):
+                        st.caption(song["explanation_numeric"])
             st.divider()
 
     # ── Emotional Space Map ───────────────────────────────────────────────────

@@ -22,6 +22,7 @@ Environment:
 """
 
 import json
+import logging
 import os
 import sys
 import time
@@ -46,6 +47,8 @@ from prompts import (
     CORRECT_SYSTEM_PROMPT,
     CORRECT_USER_TEMPLATE,
 )
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 DATA_PATH = Path(__file__).parent.parent / "data" / "songs.csv"
@@ -162,9 +165,9 @@ def _nearest_vocab(value: str, vocab: list[str], default: str) -> str:
         return value
     for v in vocab:
         if value in v or v in value:
-            print(f"[WARN]    '{value}' not in vocab — substituting '{v}'")
+            logger.warning("[WARN] '%s' not in vocab — substituting '%s'", value, v)
             return v
-    print(f"[WARN]    '{value}' not in vocab — substituting '{default}'")
+    logger.warning("[WARN] '%s' not in vocab — substituting '%s'", value, default)
     return default
 
 
@@ -201,19 +204,19 @@ def _validate_user_prompt(user_prompt: str) -> str:
 def _validate_analyze_output(user_prefs: dict, emotion_intent: str) -> None:
     for field in ("genre", "current_genre"):
         if user_prefs.get(field) not in KNOWN_GENRES:
-            print(f"[SECURITY] {field}='{user_prefs.get(field)}' not in KNOWN_GENRES after sanitisation")
+            logger.warning("[SECURITY] %s='%s' not in KNOWN_GENRES after sanitisation", field, user_prefs.get(field))
     for field in ("mood", "current_mood"):
         if user_prefs.get(field) not in KNOWN_MOODS:
-            print(f"[SECURITY] {field}='{user_prefs.get(field)}' not in KNOWN_MOODS after sanitisation")
+            logger.warning("[SECURITY] %s='%s' not in KNOWN_MOODS after sanitisation", field, user_prefs.get(field))
     for field in ("target_energy", "target_valence", "target_danceability", "target_acousticness"):
         v = user_prefs.get(field, 0.0)
         if not (0.0 <= v <= 1.0):
-            print(f"[SECURITY] {field}={v} out of [0.0, 1.0] after clamping")
+            logger.warning("[SECURITY] %s=%s out of [0.0, 1.0] after clamping", field, v)
     tempo = user_prefs.get("target_tempo", 110.0)
     if not (50.0 <= tempo <= 200.0):
-        print(f"[SECURITY] target_tempo={tempo} out of [50.0, 200.0] after clamping")
+        logger.warning("[SECURITY] target_tempo=%s out of [50.0, 200.0] after clamping", tempo)
     if emotion_intent not in VALID_INTENTS:
-        print(f"[SECURITY] emotion_intent='{emotion_intent}' not in VALID_INTENTS after sanitisation")
+        logger.warning("[SECURITY] emotion_intent='%s' not in VALID_INTENTS after sanitisation", emotion_intent)
 
 
 # ── Public pipeline functions ─────────────────────────────────────────────────
@@ -246,7 +249,7 @@ def analyze_prompt(
     raw_intent = parsed.get("emotion_intent", "match")
     emotion_intent = raw_intent if raw_intent in VALID_INTENTS else "match"
     if raw_intent not in VALID_INTENTS:
-        print(f"[WARN]    emotion_intent '{raw_intent}' not valid — defaulting to 'match'")
+        logger.warning("[WARN] emotion_intent '%s' not valid — defaulting to 'match'", raw_intent)
 
     # Validate and sanitise every field
     user_prefs = {
@@ -302,6 +305,7 @@ def self_correct(
     draft: list[tuple[dict, float, str]],
     songs: list[dict],
     client: anthropic.Anthropic,
+    seen_ids: set = None,
 ) -> tuple[list[tuple[dict, float, str]], int]:
     """
     STEP 3 — SELF-CORRECT (LLM Call #2 + conditional rule engine call).
@@ -368,7 +372,7 @@ def self_correct(
     present_ids = {song["id"] for song, _, _ in draft}
     pool = [s for s in songs if s["id"] not in present_ids and s["id"] not in rejected_ids]
 
-    replacements = recommend_songs(user_prefs, pool, k=corrections_made)
+    replacements = recommend_songs(user_prefs, pool, k=corrections_made, seen_ids=seen_ids)
     print(f"[CORRECT] Replacements found: {len(replacements)}")
     for song, score, _ in replacements:
         print(f"[CORRECT]   + {song['title']} — {song['artist']}  score={score:.3f}")
@@ -422,11 +426,15 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     # ── Step 2: DRAFT ──────────────────────────────────────────────────────────
     print("\n--- STEP 2: DRAFT (Rule Engine) ---")
     draft = draft_playlist(user_prefs, songs, seen_ids=seen_ids)
+    if not draft:
+        raise RuntimeError(
+            "No new songs available — try a different prompt or clear your session history."
+        )
 
     # ── Step 3: SELF-CORRECT ───────────────────────────────────────────────────
     print("\n--- STEP 3: SELF-CORRECT (LLM Call #2) ---")
     final_playlist, corrections_made = self_correct(
-        user_prompt, user_prefs, draft, songs, client
+        user_prompt, user_prefs, draft, songs, client, seen_ids=seen_ids
     )
 
     # ── Step 4: Metrics ────────────────────────────────────────────────────────
@@ -439,7 +447,12 @@ def run_agent(user_prompt: str, seen_ids: set = None) -> dict[str, Any]:
     # Serialise playlists as plain dicts for JSON safety
     def _serialise(playlist):
         return [
-            {**song, "score": round(score, 3), "explanation": expl}
+            {
+                **{k: v for k, v in song.items() if k != "_numeric_explanation"},
+                "score":               round(score, 3),
+                "explanation":         expl,
+                "explanation_numeric": song.get("_numeric_explanation", ""),
+            }
             for song, score, expl in playlist
         ]
 
