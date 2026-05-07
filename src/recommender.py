@@ -1,4 +1,5 @@
 import csv
+import heapq
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 
@@ -313,16 +314,34 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, seen_ids: s
 
     catalog = [s for s in songs if seen_ids is None or s["id"] not in seen_ids]
 
-    scored = []
-    for song in catalog:
-        score       = _score_song_dict(song, user_prefs)
-        explanation = _explain_dict(song, user_prefs, score)
-        song_copy   = {**song, "_numeric_explanation": _explain_numeric(song, user_prefs, score)}
-        scored.append((song_copy, score, explanation))
+    # Maintain a min-heap of size pool_size while iterating the whole catalog.
+    # Each heap op is O(log pool_size), so the full pass is O(n log pool_size)
+    # instead of O(n log n) for a full sort. Memory stays O(pool_size).
+    # The integer index breaks score ties without falling through to dict
+    # comparison (which would error on equal scores).
+    pool_size = max(k * 10, 50)
+    heap: list = []
+    for i, song in enumerate(catalog):
+        score = _score_song_dict(song, user_prefs)
+        if len(heap) < pool_size:
+            heapq.heappush(heap, (score, i, song))
+        elif score > heap[0][0]:
+            heapq.heapreplace(heap, (score, i, song))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    ranked = _apply_variety_ranking(scored)
-    return ranked[:k]
+    # Heap holds the top pool_size songs in arbitrary order. Sort descending
+    # and attach explanation strings only for the candidates the variety
+    # re-ranker will actually see.
+    top_pool = [
+        (s, sc, _explain_dict(s, user_prefs, sc))
+        for sc, _, s in sorted(heap, key=lambda x: -x[0])
+    ]
+    ranked = _apply_variety_ranking(top_pool)[:k]
+
+    # Numeric explanation is only surfaced for the final k.
+    return [
+        ({**s, "_numeric_explanation": _explain_numeric(s, user_prefs, sc)}, sc, ex)
+        for s, sc, ex in ranked
+    ]
 
 
 if __name__ == "__main__":
