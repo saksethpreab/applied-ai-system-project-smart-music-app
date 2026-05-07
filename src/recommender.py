@@ -327,7 +327,7 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5, seen_ids: s
 
 if __name__ == "__main__":
     import os
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "songs.csv")
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "songs_full.csv")
     songs = load_songs(csv_path)
 
     demo_profiles = {

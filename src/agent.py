@@ -51,7 +51,7 @@ from prompts import (
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-DATA_PATH = Path(__file__).parent.parent / "data" / "songs.csv"
+DATA_PATH = Path(__file__).parent.parent / "data" / "songs_full.csv"
 
 # ── Safe defaults used when ANALYZE JSON parsing fails completely ─────────────
 

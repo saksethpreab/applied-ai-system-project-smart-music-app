@@ -7,8 +7,8 @@ Steps:
   3. Apply data/dataset_genre_map.json to remap track_genre -> KNOWN_GENRES.
   4. Derive mood from (valence, energy) via 2x3 grid:
         E >= 0.7   ->  energetic (V>=0.5)  / intense (V<0.5)
-        E in [0.3, 0.7) ->  happy (V>=0.5)  / moody   (V<0.5)
-        E < 0.3    ->  relaxed   (V>=0.5)  / sad     (V<0.5)
+        E in [0.4, 0.7) ->  happy (V>=0.5)  / moody   (V<0.5)
+        E < 0.4    ->  relaxed   (V>=0.5)  / sad     (V<0.5)
   5. Write CSV with the existing schema plus track_id and popularity.
 
 Run after scripts/build_dataset_genre_map.py:
@@ -31,14 +31,14 @@ OUTPUT_PATH    = PROJECT_ROOT / "data" / "songs_full.csv"
 def derive_moods(valence: pd.Series, energy: pd.Series) -> pd.Series:
     """2x3 grid mapping (valence, energy) -> canonical mood from KNOWN_MOODS.
 
-    Thresholds: V at 0.5; E at 0.3 and 0.7.
+    Thresholds: V at 0.5; E at 0.4 and 0.7.
     """
     high_v = valence >= 0.5
     conditions = [
         (energy >= 0.7) &  high_v,
         (energy >= 0.7) & ~high_v,
-        (energy >= 0.3) &  high_v,
-        (energy >= 0.3) & ~high_v,
+        (energy >= 0.4) &  high_v,
+        (energy >= 0.4) & ~high_v,
         high_v,                       # low E, high V
     ]
     choices = ["energetic", "intense", "happy", "moody", "relaxed"]

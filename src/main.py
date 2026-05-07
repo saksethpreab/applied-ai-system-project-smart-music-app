@@ -14,7 +14,7 @@ from recommender import load_songs, recommend_songs
 
 def main() -> None:
     """Run the music recommender simulation and display top recommendations."""
-    songs = load_songs("data/songs.csv") 
+    songs = load_songs("data/songs_full.csv")
 
     # Define three distinct user profiles
     user_profiles = {
