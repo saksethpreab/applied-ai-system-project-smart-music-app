@@ -225,16 +225,19 @@ def _validate_analyze_output(user_prefs: dict, emotion_intent: str) -> None:
 def analyze_prompt(
     user_prompt: str,
     client: anthropic.Anthropic,
-) -> tuple[dict, str, float, str, list[str] | None]:
+) -> tuple[dict, str, float, str, list[str] | None, list[str] | None]:
     """
     STEP 1 — ANALYZE (LLM Call #1).
 
     Translate a natural-language prompt into a user_prefs dict that
     recommend_songs() can consume directly.
 
-    Returns: (user_prefs, reasoning, confidence, emotion_intent, detected_languages)
+    Returns: (user_prefs, reasoning, confidence, emotion_intent,
+              detected_languages, detected_artists)
     detected_languages is a list of ISO 639-1 codes the LLM extracted from the
     prompt, or None if no language was implied.
+    detected_artists is a list of canonicalized artist names the LLM extracted
+    from the prompt, or None if no artist was named.
     """
     system = ANALYZE_SYSTEM_PROMPT.format(
         genres=", ".join(sorted(KNOWN_GENRES)),
@@ -268,6 +271,22 @@ def analyze_prompt(
     else:
         detected_languages = None
 
+    # Parse detected artists. Accept null/missing/empty -> None.
+    # No vocabulary check: the catalog has tens of thousands of artists, so we
+    # trust the LLM's canonicalization and validate at filter time (matches in
+    # the catalog or empty pool error).
+    raw_artists = parsed.get("artists")
+    detected_artists: list[str] | None
+    if isinstance(raw_artists, list) and raw_artists:
+        detected_artists = [
+            a.strip() for a in raw_artists
+            if isinstance(a, str) and a.strip() and len(a.strip()) <= 80
+        ][:5]  # cap at 5 to bound filter cost
+        if not detected_artists:
+            detected_artists = None
+    else:
+        detected_artists = None
+
     # Validate and sanitise every field
     user_prefs = {
         "genre":               _nearest_vocab(prefs_raw.get("genre",         "lofi"),  KNOWN_GENRES, "electronic"),
@@ -294,9 +313,10 @@ def analyze_prompt(
           f"tempo={user_prefs['target_tempo']:.0f} bpm")
     print(f"[ANALYZE] emotion_intent={emotion_intent}  confidence={confidence:.2f}")
     print(f"[ANALYZE] detected_languages={detected_languages}")
+    print(f"[ANALYZE] detected_artists={detected_artists}")
     print(f"[ANALYZE] reasoning: \"{reasoning}\"")
 
-    return user_prefs, reasoning, confidence, emotion_intent, detected_languages
+    return user_prefs, reasoning, confidence, emotion_intent, detected_languages, detected_artists
 
 
 def draft_playlist(
@@ -438,7 +458,7 @@ def analyze_only(user_prompt: str) -> dict[str, Any]:
     client = _build_client()
 
     print("--- STEP 1: ANALYZE (LLM Call #1) ---")
-    user_prefs, reasoning, confidence, emotion_intent, detected_languages = (
+    user_prefs, reasoning, confidence, emotion_intent, detected_languages, detected_artists = (
         analyze_prompt(user_prompt, client)
     )
 
@@ -448,6 +468,7 @@ def analyze_only(user_prompt: str) -> dict[str, Any]:
         "confidence":         confidence,
         "emotion_intent":     emotion_intent,
         "detected_languages": detected_languages,
+        "detected_artists":   detected_artists,
     }
 
 
@@ -456,6 +477,7 @@ def run_with_analysis(
     analysis: dict[str, Any],
     languages: list[str] | None,
     seen_ids: set = None,
+    artists: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Phase 2 of the two-phase Streamlit flow: given a pre-computed analysis
@@ -464,6 +486,12 @@ def run_with_analysis(
     `languages` is the final language filter to apply: either auto-detected
     from the prompt (analysis["detected_languages"]) or chosen by the user
     via the multiselect menu. None or empty means no filtering.
+
+    `artists` is the artist filter: a list of artist names extracted from the
+    prompt by the LLM. Applied as a hard, case-insensitive substring filter
+    with OR logic (any match keeps the song). None or empty means no filter.
+    Playlist length adapts to the filtered pool — no padding from non-matching
+    artists.
     """
     user_prompt    = _validate_user_prompt(user_prompt)
     user_prefs     = analysis["user_prefs"]
@@ -480,13 +508,23 @@ def run_with_analysis(
         songs = [s for s in songs if s.get("language") in lang_set]
         print(f"[FILTER] Language filter {sorted(lang_set)}: {len(songs):,} of {before:,} songs")
 
+    if artists:
+        artist_needles = [a.lower() for a in artists]
+        before = len(songs)
+        songs = [
+            s for s in songs
+            if any(needle in (s.get("artist") or "").lower() for needle in artist_needles)
+        ]
+        print(f"[FILTER] Artist filter {artists}: {len(songs):,} of {before:,} songs")
+
     # ── Step 2: DRAFT ──────────────────────────────────────────────────────────
     print("\n--- STEP 2: DRAFT (Rule Engine) ---")
     draft = draft_playlist(user_prefs, songs, seen_ids=seen_ids)
     if not draft:
         raise RuntimeError(
             "No new songs available — try a different prompt, change your "
-            "language filter, or clear your session history."
+            "language filter, change your artist filter, or clear your "
+            "session history."
         )
 
     # ── Step 3: SELF-CORRECT ───────────────────────────────────────────────────
@@ -524,6 +562,8 @@ def run_with_analysis(
             "emotion_intent":     emotion_intent,
             "detected_languages": analysis.get("detected_languages"),
             "applied_languages":  list(languages) if languages else None,
+            "detected_artists":   analysis.get("detected_artists"),
+            "applied_artists":    list(artists) if artists else None,
         },
         "draft_playlist":   _serialise(draft),
         "final_playlist":   _serialise(final_playlist),
@@ -536,6 +576,7 @@ def run_agent(
     user_prompt: str,
     seen_ids: set = None,
     languages: list[str] | None = None,
+    artists: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Top-level orchestrator. Run the full Plan-Act-Check pipeline in one call.
@@ -544,13 +585,20 @@ def run_agent(
     the LLM detected from the prompt. Pass an explicit list to override
     detection (e.g., from the Streamlit multiselect).
 
+    `artists`: explicit artist filter. If None, falls back to the artists the
+    LLM detected from the prompt.
+
     Returns a dict with keys:
         user_prompt, analysis, draft_playlist, final_playlist, metrics
     """
     print(f'\n[AGENT] Starting pipeline for: "{user_prompt}"\n')
     analysis = analyze_only(user_prompt)
     effective_languages = languages if languages is not None else analysis["detected_languages"]
-    return run_with_analysis(user_prompt, analysis, effective_languages, seen_ids=seen_ids)
+    effective_artists   = artists   if artists   is not None else analysis["detected_artists"]
+    return run_with_analysis(
+        user_prompt, analysis, effective_languages,
+        seen_ids=seen_ids, artists=effective_artists,
+    )
 
 
 # ── Refresh / session helpers ─────────────────────────────────────────────────
@@ -562,10 +610,12 @@ def refresh_playlist(
     user_prompt: str,
     session: dict,
     languages: list[str] | None = None,
+    artists: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Run the pipeline for user_prompt, skipping every song already recommended
-    for that prompt in this session. Optionally apply a language filter.
+    for that prompt in this session. Optionally apply a language filter and/or
+    an artist filter.
 
     Usage:
         session = {}
@@ -573,7 +623,7 @@ def refresh_playlist(
         r2 = refresh_playlist("chill late-night vibes", session)  # songs 6-10
     """
     seen = session.get(user_prompt, set())
-    result = run_agent(user_prompt, seen_ids=seen, languages=languages)
+    result = run_agent(user_prompt, seen_ids=seen, languages=languages, artists=artists)
     session[user_prompt] = seen | result["recommended_ids"]
     return result
 

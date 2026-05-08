@@ -125,13 +125,16 @@ def _do_analyze(prompt: str) -> bool:
 
 
 def _do_draft(prompt: str, analysis: dict, languages: list[str] | None, fresh: bool) -> None:
-    """Phase 2: run draft + correct with the chosen language filter."""
+    """Phase 2: run draft + correct with the chosen language filter and any
+    artists detected during ANALYZE. Artist filter has no UI fallback — if the
+    LLM didn't detect any, no filter is applied."""
     if fresh:
         st.session_state["session"].pop(prompt, None)
     seen = st.session_state["session"].get(prompt, set())
+    artists = analysis.get("detected_artists")
     try:
         with st.spinner("Building your playlist..."):
-            result = run_with_analysis(prompt, analysis, languages, seen_ids=seen)
+            result = run_with_analysis(prompt, analysis, languages, seen_ids=seen, artists=artists)
             st.session_state["result"]             = result
             st.session_state["selected_languages"] = languages
             st.session_state["session"][prompt]    = seen | result["recommended_ids"]
@@ -234,6 +237,14 @@ if st.session_state["result"] is not None:
 
     # Final playlist
     st.subheader("Your Playlist")
+    applied_artists = analysis.get("applied_artists")
+    if applied_artists and len(result["final_playlist"]) < 5:
+        artist_label = ", ".join(applied_artists)
+        st.caption(
+            f"Showing {len(result['final_playlist'])} of "
+            f"{len(result['final_playlist'])} available tracks by {artist_label} "
+            f"that match your other criteria."
+        )
     for i, song in enumerate(result["final_playlist"], 1):
         with st.container():
             col_num, col_main, col_score, col_link = st.columns([0.5, 5.5, 1.2, 1.3])
@@ -336,6 +347,10 @@ if st.session_state["result"] is not None:
         st.markdown(f"**Reasoning:** {analysis['reasoning']}")
         st.markdown(f"**Confidence:** {analysis['confidence']:.0%}")
         st.markdown(f"**Emotion Intent:** `{analysis.get('emotion_intent', 'match')}`")
+        detected_artists = analysis.get("detected_artists")
+        st.markdown(
+            f"**Detected Artists:** {', '.join(detected_artists) if detected_artists else 'None'}"
+        )
         st.markdown("**Detected Preferences:**")
         pref_col1, pref_col2 = st.columns(2)
         with pref_col1:

@@ -27,7 +27,8 @@ User prompt (natural language)
 ┌───────────────────────────────────────────────────────┐
 │  PLAN — analyze_only() — LLM Call #1                  │
 │  Claude extracts: genre, mood, numeric targets,       │
-│  emotion_intent, languages. Intent nudges targets.    │
+│  emotion_intent, languages, artists.                  │
+│  Intent nudges targets.                               │
 └────────────────────────┬──────────────────────────────┘
                          │ analysis dict
                          ▼
@@ -49,8 +50,9 @@ User prompt (natural language)
                           ▼
 ┌───────────────────────────────────────────────────────┐
 │  ACT — run_with_analysis() — Rule Engine              │
-│  Filter catalog by language → score every song →      │
-│  heap-based top-50 pool → variety re-rank → top 5    │
+│  Filter catalog by language → filter by artist →      │
+│  score every song → heap-based top-50 pool →          │
+│  variety re-rank → top 5 (or fewer if pool smaller)   │
 └────────────────────────┬──────────────────────────────┘
                          │ draft + scores
                          ▼
@@ -84,7 +86,7 @@ User prompt (natural language)
 |---|---|---|
 | `id` | int (catalog row index) | No — deduplication only |
 | `title` | str | No — display only |
-| `artist` | str | No — display only |
+| `artist` | str | No — pre-filter only (case-insensitive substring) |
 | `genre` | str | Yes — categorical |
 | `mood` | str | Yes — categorical |
 | `energy` | float 0–1 | Yes — numeric |
@@ -189,6 +191,41 @@ if languages:
 ```
 
 The filtered list is what `draft_playlist` and `self_correct` see — replacements during the correction step are drawn from the same language-restricted pool.
+
+---
+
+## Artist Filter
+
+A second pre-scoring filter, applied **after** the language filter when the prompt names a specific artist. Unlike the language filter, the artist set is unbounded (the catalog has tens of thousands of unique artists), so there is no fallback UI menu — the filter is applied if and only if the LLM extracts artists from the prompt.
+
+### LLM extraction
+
+`ANALYZE_SYSTEM_PROMPT` instructs Claude to populate a top-level `artists` field whenever the prompt names a specific musical artist or band, canonicalizing the name (e.g. `"john mayer"` → `"John Mayer"`). The same instruction asks Claude to also populate `languages` from its world knowledge of what language the named artist primarily sings in (John Mayer → `["en"]`, BTS → `["ko"]`), so a prompt like *"sob rock john mayer songs"* yields both an artist filter and the right language pre-filter without the user spelling out the language.
+
+The parser caps the list at 5 entries, drops any empty/oversized strings, and treats `null`/missing/empty as "no filter."
+
+### Filter implementation
+
+In [src/agent.py](../src/agent.py) `run_with_analysis`:
+
+```python
+if artists:
+    artist_needles = [a.lower() for a in artists]
+    songs = [
+        s for s in songs
+        if any(needle in (s.get("artist") or "").lower() for needle in artist_needles)
+    ]
+```
+
+**Match logic:** case-insensitive **substring** match. This deliberately includes collaborations: a `"Taylor Swift"` filter matches the catalog row `"Taylor Swift, Bon Iver"`. Multiple artists are combined with **OR** logic — a song survives if it matches *any* of the named artists.
+
+**Adaptive playlist size:** if the artist-filtered pool has fewer than 5 songs, the final playlist shrinks to match. `recommend_songs(k=5)` already returns up to k songs from whatever pool it gets, so an artist with only 2 catalog tracks yields a 2-song playlist. We never pad with non-matching artists. The `RuntimeError` ("No new songs available...") fires only when the filter empties the pool entirely — typically when the LLM canonicalized to an artist not present in the catalog.
+
+**No score threshold:** the rule engine still scores the surviving songs against mood/energy/etc., and CORRECT can still reject mismatches, but there is no minimum-score gate. With a small pool we surface what's available rather than reject everything.
+
+### Trade-off — substring over-match
+
+Substring matching can over-match in principle ("Mayer" hits both `"John Mayer"` and `"Mayer Hawthorne"`). In practice we rely on the LLM to canonicalize to a full name, making collisions rare. Token-based matching was considered but loses collab support — a `"Taylor Swift"` token would not match `"Taylor Swift, Bon Iver"` without extra parsing of `,`/`&`/`feat.` separators.
 
 ---
 

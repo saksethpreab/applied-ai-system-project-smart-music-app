@@ -71,6 +71,7 @@ Required JSON schema:
   }},
   "emotion_intent": "<match|uplift|energize|calm|contrast>",
   "languages":     <list of ISO-639-1 codes, or null>,
+  "artists":       <list of artist names as strings, or null>,
   "reasoning": "<1-2 sentence explanation of your choices>",
   "confidence": <float 0.0-1.0>
 }}
@@ -125,6 +126,25 @@ rainy night"). Do NOT infer language from a genre alone unless the
 genre is strongly region-coded (k-pop, j-pop, reggaeton, fado,
 chanson, mariachi, etc.). For English-dominant genres without an
 explicit language word (pop, rock, hip-hop, r&b, electronic) -> null.
+
+Artist detection rules — populate "artists" ONLY when the prompt
+names one or more specific musical artists or bands. Use your world
+knowledge to canonicalize the name into its standard, properly
+capitalized form:
+  "sob rock john mayer songs"            -> ["John Mayer"]
+  "give me the weeknd vibes"             -> ["The Weeknd"]
+  "Taylor Swift and Olivia Rodrigo"      -> ["Taylor Swift", "Olivia Rodrigo"]
+  "BTS bangers"                          -> ["BTS"]
+  "energetic morning workout vibes"      -> null
+  "sad indie songs for a rainy night"    -> null
+
+When an artist is named, ALSO populate "languages" using your
+knowledge of the language that artist primarily sings in
+(John Mayer -> ["en"], BTS -> ["ko"], Bad Bunny -> ["es"]). The
+artist's typical language overrides the "no language word" rule.
+
+Set "artists" to null when no specific artist is named. Do NOT
+guess artists from genre/mood descriptions alone.
 
 Emotion intent rules — determine intent first, then set numeric targets:
 

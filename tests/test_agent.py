@@ -45,7 +45,7 @@ def _make_analyze_response(
     genre="lofi", mood="chill", current_genre="lofi", current_mood="chill",
     energy=0.25, valence=0.50, dance=0.35, acoustic=0.80, tempo=85.0,
     reasoning="Chill studying vibes.", confidence=0.88,
-    languages=None,
+    languages=None, artists=None,
 ):
     payload = {
         "user_prefs": {
@@ -62,6 +62,7 @@ def _make_analyze_response(
         "reasoning":  reasoning,
         "confidence": confidence,
         "languages":  languages,
+        "artists":    artists,
     }
     msg = MagicMock()
     msg.content = [MagicMock(text=json.dumps(payload))]
@@ -89,7 +90,7 @@ class TestAnalyzePrompt:
         """LLM returns valid JSON — result must contain all 9 required user_prefs keys,
         a non-empty reasoning string, and a confidence value in [0.0, 1.0]."""
         mock_client.messages.create.return_value = _make_analyze_response()
-        prefs, reasoning, confidence, _, _ = analyze_prompt("chill studying music", mock_client)
+        prefs, reasoning, confidence, _, _, _ = analyze_prompt("chill studying music", mock_client)
 
         assert set(prefs.keys()) == {
             "genre", "mood", "current_genre", "current_mood",
@@ -106,7 +107,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             energy=0.25, valence=0.50, dance=0.35, acoustic=0.80, tempo=85.0
         )
-        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         for key in ("target_energy", "target_valence", "target_danceability", "target_acousticness"):
             assert 0.0 <= prefs[key] <= 1.0, f"{key} out of range"
@@ -119,7 +120,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             energy=1.9, tempo=300.0
         )
-        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         assert prefs["target_energy"] == 1.0
         assert prefs["target_tempo"] == 200.0
@@ -131,7 +132,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             genre="chillwave", current_genre="chillwave"
         )
-        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         from prompts import KNOWN_GENRES
         assert prefs["genre"] in KNOWN_GENRES
@@ -147,7 +148,7 @@ class TestAnalyzePrompt:
         good_msg = _make_analyze_response()
 
         mock_client.messages.create.side_effect = [bad_msg, good_msg]
-        prefs, reasoning, confidence, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, reasoning, confidence, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         assert confidence == 0.88
 
@@ -160,7 +161,7 @@ class TestAnalyzePrompt:
         bad_msg.usage   = MagicMock(output_tokens=5)
 
         mock_client.messages.create.side_effect = [bad_msg, bad_msg]
-        prefs, _, confidence, _, _ = analyze_prompt("???", mock_client)
+        prefs, _, confidence, _, _, _ = analyze_prompt("???", mock_client)
 
         assert confidence == 0.0
         assert prefs["genre"] == _ANALYZE_FALLBACK_PREFS["genre"]
@@ -414,6 +415,7 @@ class TestRunAgent:
         assert set(result["analysis"].keys()) == {
             "user_prefs", "reasoning", "confidence",
             "emotion_intent", "detected_languages", "applied_languages",
+            "detected_artists", "applied_artists",
         }
 
     def test_metrics_structure_and_types(self):
@@ -447,3 +449,233 @@ class TestRunAgent:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}, clear=False):
             with pytest.raises(EnvironmentError):
                 run_agent("anything")
+
+
+# ── Artist detection + filtering tests ────────────────────────────────────────
+
+class TestArtistFilter:
+    """Tests for the artist detection + hard-filter capability added in the
+    ANALYZE step. The filter is a case-insensitive substring match with OR
+    logic across multiple artist names; playlist length adapts to the
+    filtered pool (no padding from non-matching artists)."""
+
+    # The test fixture data/songs.csv has no `language` column, so language
+    # filtering would empty the catalog. All these tests use languages=None.
+    # We patch DATA_PATH so the pipeline reads the small test fixture rather
+    # than data/songs_full.csv.
+
+    def _approve_all_correct_response(self):
+        """A CORRECT response with no per-song evaluations approves the entire
+        draft by default (eval_by_id.get(song['id'], {}).get('keep', True))."""
+        return _make_correct_response([], approved=True)
+
+    def test_analyze_extracts_artists(self, mock_client):
+        """The LLM's `artists` field must surface as detected_artists, preserving
+        the LLM's canonicalization (e.g. 'John Mayer' rather than 'john mayer')."""
+        mock_client.messages.create.return_value = _make_analyze_response(
+            artists=["John Mayer"]
+        )
+        _, _, _, _, _, detected_artists = analyze_prompt("john mayer songs", mock_client)
+        assert detected_artists == ["John Mayer"]
+
+    def test_analyze_returns_none_when_no_artist(self, mock_client):
+        """When the LLM returns null for artists, detected_artists must be None
+        so downstream code skips the filter rather than erroring."""
+        mock_client.messages.create.return_value = _make_analyze_response(artists=None)
+        _, _, _, _, _, detected_artists = analyze_prompt("workout vibes", mock_client)
+        assert detected_artists is None
+
+    def test_analyze_returns_none_for_empty_artist_list(self, mock_client):
+        """An empty artist list from the LLM must coalesce to None."""
+        mock_client.messages.create.return_value = _make_analyze_response(artists=[])
+        _, _, _, _, _, detected_artists = analyze_prompt("workout vibes", mock_client)
+        assert detected_artists is None
+
+    def test_analyze_caps_artist_count(self, mock_client):
+        """The parser must cap the number of artists at 5 to bound filter cost,
+        even if the LLM returns more."""
+        mock_client.messages.create.return_value = _make_analyze_response(
+            artists=["A", "B", "C", "D", "E", "F", "G"]
+        )
+        _, _, _, _, _, detected_artists = analyze_prompt("any prompt", mock_client)
+        assert len(detected_artists) == 5
+
+    def test_artist_filter_keeps_only_matching_songs(self):
+        """When run_agent detects an artist, every song in the final playlist
+        must contain that artist name (case-insensitive) in its artist field."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="pop", mood="melancholic",
+                    current_genre="pop", current_mood="sad",
+                    energy=0.40, valence=0.40, dance=0.50, acoustic=0.55, tempo=100.0,
+                    artists=["John Mayer"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("sob rock john mayer songs")
+
+        assert len(result["final_playlist"]) > 0
+        for song in result["final_playlist"]:
+            assert "john mayer" in song["artist"].lower()
+
+    def test_artist_filter_substring_match_includes_collabs(self):
+        """Substring match must include collaborations where the artist name
+        appears as one entry in a comma-separated list (e.g. 'Taylor Swift ft.
+        Bon Iver' should match a Taylor Swift filter)."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="pop", mood="sad",
+                    current_genre="pop", current_mood="sad",
+                    energy=0.40, valence=0.30, dance=0.50, acoustic=0.50, tempo=100.0,
+                    artists=["Taylor Swift"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("Taylor Swift breakup tracks")
+
+        for song in result["final_playlist"]:
+            assert "taylor swift" in song["artist"].lower()
+        # Confirm the collab row is reachable: at least one final entry should
+        # come from the post-filter pool that includes 'Taylor Swift ft. Bon Iver'
+        # (id 199 in songs.csv).
+        all_artist_strings = [s["artist"].lower() for s in result["final_playlist"]]
+        assert any("taylor swift" in a for a in all_artist_strings)
+
+    def test_artist_filter_empty_pool_raises(self):
+        """When the LLM returns an artist not present in the catalog, the
+        pipeline must raise RuntimeError (no silent fallback to other artists)."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    artists=["Some Random Indie Band That Does Not Exist"]
+                ),
+                self._approve_all_correct_response(),
+            ]
+            with pytest.raises(RuntimeError):
+                run_agent("songs by Some Random Indie Band That Does Not Exist")
+
+    def test_no_artist_skips_filter(self):
+        """When the LLM returns artists=null, no filter is applied — the full
+        catalog is available to the rule engine and a 5-song playlist results."""
+        prefs = {
+            "genre": "lofi", "mood": "chill",
+            "current_genre": "lofi", "current_mood": "chill",
+            "target_energy": 0.25, "target_valence": 0.50,
+            "target_danceability": 0.35, "target_acousticness": 0.80,
+            "target_tempo": 85.0,
+        }
+        full_draft = draft_playlist(prefs, load_songs(str(SONGS_PATH)))
+
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(artists=None),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("chill studying music")
+
+        assert len(result["final_playlist"]) == 5
+        # No artist constraint => same set of recommended IDs as the unfiltered draft
+        assert {s["id"] for s in result["final_playlist"]} == {s["id"] for s, _, _ in full_draft}
+
+    def test_multi_artist_or_logic(self):
+        """A list of artists must apply OR logic — every song in the final
+        playlist must match at least one of the named artists."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="pop", mood="sad",
+                    current_genre="pop", current_mood="sad",
+                    energy=0.40, valence=0.30, dance=0.50, acoustic=0.50, tempo=100.0,
+                    artists=["John Mayer", "Taylor Swift"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("John Mayer and Taylor Swift sad songs")
+
+        for song in result["final_playlist"]:
+            artist_lower = song["artist"].lower()
+            assert "john mayer" in artist_lower or "taylor swift" in artist_lower
+
+    def test_artist_filter_case_insensitive(self):
+        """Lowercase artist names from the LLM must still match capitalized
+        catalog entries — the filter applies .lower() to both sides."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="pop", mood="melancholic",
+                    current_genre="pop", current_mood="sad",
+                    energy=0.40, valence=0.40, dance=0.50, acoustic=0.55, tempo=100.0,
+                    artists=["john mayer"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("john mayer songs")
+
+        assert len(result["final_playlist"]) > 0
+        for song in result["final_playlist"]:
+            assert "john mayer" in song["artist"].lower()
+
+    def test_analysis_dict_includes_artist_metadata(self):
+        """The result dict's analysis section must surface both detected_artists
+        and applied_artists, parallel to the language metadata."""
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="pop", mood="melancholic",
+                    current_genre="pop", current_mood="sad",
+                    energy=0.40, valence=0.40, dance=0.50, acoustic=0.55, tempo=100.0,
+                    artists=["John Mayer"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("John Mayer sad songs")
+
+        assert result["analysis"]["detected_artists"] == ["John Mayer"]
+        assert result["analysis"]["applied_artists"] == ["John Mayer"]
+
+    def test_short_playlist_when_artist_pool_small(self):
+        """If the artist-filtered pool has fewer than 5 songs, the final playlist
+        shrinks to match — no padding from non-matching artists, no error."""
+        # 'Phoebe Bridgers' has only 1 song in the test fixture (id 62)
+        with patch("agent._build_client") as mock_build, \
+             patch("agent.DATA_PATH", SONGS_PATH):
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+            mock_client.messages.create.side_effect = [
+                _make_analyze_response(
+                    genre="indie", mood="sad",
+                    current_genre="indie", current_mood="sad",
+                    energy=0.35, valence=0.30, dance=0.40, acoustic=0.50, tempo=110.0,
+                    artists=["Phoebe Bridgers"],
+                ),
+                self._approve_all_correct_response(),
+            ]
+            result = run_agent("sad Phoebe Bridgers tracks")
+
+        assert 0 < len(result["final_playlist"]) <= 5
+        # All entries must still be Phoebe Bridgers (no padding from other artists)
+        for song in result["final_playlist"]:
+            assert "phoebe bridgers" in song["artist"].lower()
