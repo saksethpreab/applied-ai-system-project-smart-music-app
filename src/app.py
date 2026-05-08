@@ -1,6 +1,7 @@
 import logging
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -8,10 +9,26 @@ sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from agent import refresh_playlist
+from agent import analyze_only, run_with_analysis, DATA_PATH
+from prompts import KNOWN_LANGUAGES
+from recommender import load_songs
 
 logger = logging.getLogger(__name__)
 _MAX_REQUESTS_PER_MINUTE = 10
+_MIN_LANGUAGE_COUNT = 50  # hide languages with fewer than this many tracks
+
+# ISO 639-1 → display name. Local to the UI; the canonical KNOWN_LANGUAGES set
+# lives in prompts.py. Keep these in sync.
+_LANGUAGE_LABELS = {
+    "en": "English",     "es": "Spanish",   "pt": "Portuguese",  "fr": "French",
+    "de": "German",      "it": "Italian",   "nl": "Dutch",       "sv": "Swedish",
+    "da": "Danish",      "nb": "Norwegian", "fi": "Finnish",     "pl": "Polish",
+    "cs": "Czech",       "hu": "Hungarian", "ro": "Romanian",    "ru": "Russian",
+    "uk": "Ukrainian",   "tr": "Turkish",   "ar": "Arabic",      "he": "Hebrew",
+    "hi": "Hindi",       "bn": "Bengali",   "id": "Indonesian",  "vi": "Vietnamese",
+    "th": "Thai",        "ja": "Japanese",  "ko": "Korean",      "zh": "Chinese",
+    "el": "Greek",       "unknown": "Unknown",
+}
 
 st.set_page_config(
     page_title="MoodSync",
@@ -20,14 +37,24 @@ st.set_page_config(
 )
 
 for key, default in [
-    ("result", None),
-    ("last_prompt", None),
-    ("error", None),
-    ("session", {}),   # maps prompt string -> set of seen song IDs
-    ("request_times", []),
+    ("phase",              "idle"),  # idle | awaiting_languages | complete
+    ("result",             None),
+    ("last_prompt",        None),
+    ("analysis",           None),    # cached analyze_only output
+    ("selected_languages", None),    # auto-detected OR menu choice
+    ("error",              None),
+    ("session",            {}),       # maps prompt string -> set of seen song IDs
+    ("request_times",      []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+@st.cache_data(show_spinner=False)
+def _language_counts() -> dict[str, int]:
+    songs = load_songs(str(DATA_PATH))
+    return dict(Counter(s.get("language", "unknown") for s in songs))
+
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -46,12 +73,12 @@ user_prompt = st.text_area(
     height=120,
 )
 col_run, col_refresh = st.columns([2, 1])
-run_button     = col_run.button("Get Recommendations", type="primary",   use_container_width=True)
+run_button     = col_run.button("Get Recommendations", type="primary", use_container_width=True)
 refresh_button = col_refresh.button(
     "🔄 Refresh",
     type="secondary",
     use_container_width=True,
-    disabled=st.session_state["last_prompt"] is None,
+    disabled=st.session_state["last_prompt"] is None or st.session_state["analysis"] is None,
 )
 
 # ── Run logic ─────────────────────────────────────────────────────────────────
@@ -66,37 +93,108 @@ def _check_rate_limit() -> bool:
     return True
 
 
-def _run(prompt: str, fresh: bool) -> None:
+def _do_analyze(prompt: str) -> bool:
+    """Phase 1: run analyze_only. Returns True on success."""
     if not _check_rate_limit():
         st.session_state["error"] = "Too many requests — please wait a moment before trying again."
-        return
+        return False
     st.session_state["error"] = None
-    if fresh:
-        st.session_state["session"].pop(prompt, None)   # clear history → new search
     try:
-        with st.spinner("Analyzing your request and building your playlist..."):
-            result = refresh_playlist(prompt, st.session_state["session"])
-            st.session_state["result"] = result
+        with st.spinner("Analyzing your request..."):
+            analysis = analyze_only(prompt)
+            st.session_state["analysis"]    = analysis
             st.session_state["last_prompt"] = prompt
+            st.session_state["result"]      = None
+        return True
     except EnvironmentError as e:
         st.session_state["error"] = f"API key error: {e}"
-        st.session_state["result"] = None
+    except (RuntimeError, ValueError) as e:
+        st.session_state["error"] = f"Analysis error: {e}"
+    except Exception:
+        logger.exception("Unexpected analyze error for prompt: %r", prompt)
+        st.session_state["error"] = "An unexpected error occurred during analysis."
+    return False
+
+
+def _do_draft(prompt: str, analysis: dict, languages: list[str] | None, fresh: bool) -> None:
+    """Phase 2: run draft + correct with the chosen language filter."""
+    if fresh:
+        st.session_state["session"].pop(prompt, None)
+    seen = st.session_state["session"].get(prompt, set())
+    try:
+        with st.spinner("Building your playlist..."):
+            result = run_with_analysis(prompt, analysis, languages, seen_ids=seen)
+            st.session_state["result"]             = result
+            st.session_state["selected_languages"] = languages
+            st.session_state["session"][prompt]    = seen | result["recommended_ids"]
+            st.session_state["phase"]              = "complete"
     except RuntimeError as e:
         st.session_state["error"] = f"Pipeline error: {e}"
         st.session_state["result"] = None
     except Exception:
-        logger.exception("Unexpected pipeline error for prompt: %r", prompt)
+        logger.exception("Unexpected draft error for prompt: %r", prompt)
         st.session_state["error"] = "An unexpected error occurred. Please try again."
         st.session_state["result"] = None
 
+
 if run_button and user_prompt.strip():
-    _run(user_prompt.strip(), fresh=True)
+    if _do_analyze(user_prompt.strip()):
+        analysis = st.session_state["analysis"]
+        detected = analysis.get("detected_languages")
+        if detected:
+            # Auto-detected language — skip the menu
+            _do_draft(user_prompt.strip(), analysis, detected, fresh=True)
+        else:
+            # No language signal in the prompt — defer to the menu
+            st.session_state["phase"] = "awaiting_languages"
     st.rerun()
 elif run_button:
     st.warning("Please enter a prompt first.")
 elif refresh_button:
-    _run(st.session_state["last_prompt"], fresh=False)
+    # Reuse cached analysis + selected languages, just get fresh draft+correct
+    _do_draft(
+        st.session_state["last_prompt"],
+        st.session_state["analysis"],
+        st.session_state["selected_languages"],
+        fresh=False,
+    )
     st.rerun()
+
+# ── Language selection menu (only when analyze didn't detect a language) ──────
+
+if st.session_state["phase"] == "awaiting_languages" and st.session_state["analysis"] is not None:
+    counts = _language_counts()
+    # Sort options by count desc, hide tail under threshold
+    available = sorted(
+        (code for code in KNOWN_LANGUAGES if counts.get(code, 0) >= _MIN_LANGUAGE_COUNT),
+        key=lambda c: counts.get(c, 0),
+        reverse=True,
+    )
+    default = [c for c in ("en", "unknown") if c in available]
+
+    st.info(
+        "Your prompt didn't reference a specific language. "
+        "Pick which languages to include in the playlist."
+    )
+    selected = st.multiselect(
+        "Languages",
+        options=available,
+        default=default,
+        format_func=lambda c: f"{_LANGUAGE_LABELS.get(c, c)}  ({counts.get(c, 0):,})",
+        key="language_multiselect",
+    )
+
+    if st.button("Generate playlist", type="primary", use_container_width=True):
+        if not selected:
+            st.warning("Please select at least one language.")
+        else:
+            _do_draft(
+                st.session_state["last_prompt"],
+                st.session_state["analysis"],
+                selected,
+                fresh=True,
+            )
+            st.rerun()
 
 # ── Error display ─────────────────────────────────────────────────────────────
 

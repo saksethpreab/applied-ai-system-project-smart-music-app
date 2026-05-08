@@ -25,24 +25,40 @@ User prompt (natural language)
         │
         ▼
 ┌───────────────────────────────────────────────────────┐
-│  PLAN — analyze_prompt() — LLM Call #1               │
+│  PLAN — analyze_only() — LLM Call #1                  │
 │  Claude extracts: genre, mood, numeric targets,       │
-│  emotion_intent. Intent nudges numeric targets.       │
+│  emotion_intent, languages. Intent nudges targets.    │
 └────────────────────────┬──────────────────────────────┘
-                         │ user_prefs dict
+                         │ analysis dict
                          ▼
+                   ┌─────┴──────┐
+                   │            │
+           languages         languages
+           detected           null
+                   │            │
+                   │            ▼
+                   │   ┌─────────────────────────────┐
+                   │   │  UI: language multiselect   │
+                   │   │  (default: en + unknown)    │
+                   │   │  user clicks Generate       │
+                   │   └────────┬────────────────────┘
+                   │            │
+                   ▼            ▼
+                   └──────┬─────┘
+                          │ analysis + languages
+                          ▼
 ┌───────────────────────────────────────────────────────┐
-│  ACT — draft_playlist() — Rule Engine                 │
-│  Score all songs → genre gate → variety re-rank       │
-│  → top 5 draft playlist                               │
+│  ACT — run_with_analysis() — Rule Engine              │
+│  Filter catalog by language → score every song →      │
+│  heap-based top-50 pool → variety re-rank → top 5    │
 └────────────────────────┬──────────────────────────────┘
                          │ draft + scores
                          ▼
 ┌───────────────────────────────────────────────────────┐
 │  CHECK — self_correct() — LLM Call #2                 │
 │  Claude evaluates each song's fit. Rejects mismatches.│
-│  Rule engine replaces rejected songs from remaining   │
-│  catalog. Returns final playlist + correction count.  │
+│  Rule engine replaces from same language-filtered     │
+│  pool. Returns final playlist + correction count.     │
 └────────────────────────┬──────────────────────────────┘
                          │
                          ▼
@@ -51,6 +67,10 @@ User prompt (natural language)
                   + draft vs. final comparison
                   + evaluation metrics
 ```
+
+**Two-phase pipeline:** The Streamlit UI splits PLAN from ACT/CHECK so that the language menu can be inserted only when the prompt provides no language signal. When ANALYZE detects a language (e.g., "k-pop bangers" → `["ko"]`), the menu is skipped and the pipeline runs straight through. The CLI (`run_agent`) is a thin wrapper that runs both phases in one call.
+
+**Refresh button** (Streamlit) reuses the cached analysis and language selection — only re-runs DRAFT + CHECK with updated `seen_ids`. Saves an LLM call per refresh.
 
 **Interface:** Streamlit web UI (`src/app.py`, app name: MoodSync) and CLI (`python src/agent.py "prompt"`).
 
@@ -62,7 +82,7 @@ User prompt (natural language)
 
 | Field | Type | Used in scoring |
 |---|---|---|
-| `id` | str (Spotify) or int (CSV) | No — deduplication only |
+| `id` | int (catalog row index) | No — deduplication only |
 | `title` | str | No — display only |
 | `artist` | str | No — display only |
 | `genre` | str | Yes — categorical |
@@ -72,6 +92,9 @@ User prompt (natural language)
 | `danceability` | float 0–1 | Yes — numeric |
 | `acousticness` | float 0–1 | Yes — numeric |
 | `tempo_bpm` | float 60–200 | Yes — numeric (normalized) |
+| `track_id` | str (Spotify ID) | No — reserved for future "Open in Spotify" links |
+| `popularity` | int 0–100 | No — reserved for future tie-breaking |
+| `language` | str (ISO 639-1 or `"unknown"`) | No — pre-filter only |
 
 ### UserProfile (structured preference dict)
 
@@ -91,37 +114,81 @@ User prompt (natural language)
 
 ## Data Sources
 
-### Default — CSV Catalog (`data/songs.csv`)
+### Production catalog — `data/songs_full.csv`
 
-301 hand-curated songs loaded via `load_songs()` in `recommender.py`. Used when Spotify credentials are absent.
+80,393 unique tracks, derived offline from the public **Maharshipandya Spotify Tracks Dataset** (113,999 raw rows, 114 genre tags) which was scraped before Spotify deprecated `/audio-features`, `/audio-analysis`, `/recommendations`, and other key endpoints in November 2024. Building from a frozen pre-deprecation snapshot is the only viable path to the curated audio features (`energy`, `valence`, `danceability`, `acousticness`, `tempo`) that this scoring engine needs.
 
-### Live — Spotify Web API (`src/spotify_client.py`)
+### Test fixture — `data/songs.csv`
 
-When `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are set in `.env`, `fetch_spotify_songs(user_prefs)` is called after the Plan step and replaces the CSV catalog for that request.
+The original ~30-song hand-labeled catalog. Kept as a deterministic, fast-loading fixture for `tests/test_recommender.py` and `tests/test_agent.py`. Production code paths point at `songs_full.csv`; tests stay on `songs.csv`.
 
-**Flow:**
-1. Two search queries: `genre:{current_genre}` and `genre:{current_genre} {current_mood}` — up to 50 results each, deduplicated (~100 candidates)
-2. Batch audio-features call (`/audio-features`, up to 100 IDs) — returns energy, valence, danceability, acousticness, tempo
-3. Batch artist call (`/artists`, up to 50 IDs per call) — returns genre tags
-4. Genre tags translated to `KNOWN_GENRES` via `translate_spotify_genres()` in `spotify_utils.py`, using `data/spotify_genre_map.json`
-5. Mood inferred from valence + energy quadrants (see table below)
-6. Returns list of song dicts in the exact same schema as `load_songs()`
+### Catalog preparation pipeline
 
-**Mood inference from Spotify audio features:**
+Two scripts produce `songs_full.csv` from the raw `data/dataset.csv`:
 
-| valence | energy | Inferred mood |
+**1. `scripts/build_dataset_genre_map.py`** — one-time Claude Haiku call
+- Extracts the 114 unique `track_genre` values from `dataset.csv`
+- Asks Claude to map each to a value in `KNOWN_GENRES` (the project's vocabulary of ~40 genres)
+- Validates that every mapping lands in the allowed set
+- Writes `data/dataset_genre_map.json`
+
+**2. `scripts/prepare_dataset.py`** — pure pandas + lingua, no API calls
+1. Drop rows with `popularity == 0` (dead/unavailable tracks)
+2. Dedupe by `track_id`, keeping the highest-popularity row per duplicate set
+3. Apply the genre map
+4. Derive `mood` from `(valence, energy)` via a 2×3 grid (see below)
+5. Detect `language` per track via `lingua-language-detector` (high-accuracy mode, restricted to a curated 29-language candidate set)
+6. Write `data/songs_full.csv` with the canonical schema plus `track_id`, `popularity`, `language`
+
+**Mood derivation grid (2×3):**
+
+|  | valence < 0.5 | valence ≥ 0.5 |
 |---|---|---|
-| ≥ 0.6 | ≥ 0.6 | happy |
-| ≥ 0.6 | < 0.6 | relaxed |
-| < 0.4 | ≥ 0.6 | intense |
-| < 0.4 | < 0.4 | sad |
-| otherwise | — | chill |
+| **energy ≥ 0.7** | `intense` | `energetic` |
+| **energy 0.4–0.7** | `moody` | `happy` |
+| **energy < 0.4** | `sad` | `relaxed` |
 
-**Genre map generation (one-time):**
-```bash
-python scripts/generate_genre_map.py
+The six output values cover all five mood families exactly once or twice (`sad` and `moody` both belong to the melancholic family). This guarantees that any LLM-emitted mood from `KNOWN_MOODS` matches at least at the family level (0.5 score), and frequently as an exact match (1.0 score), in `_family_match`. The thresholds are deterministic and reproducible.
+
+**Language detection:**
+
+`prepare_dataset.py` uses [lingua-language-detector](https://github.com/pemistahl/lingua-py) (pure Python, no compile dependencies — works on Python 3.14 where `fasttext-wheel` does not). High-accuracy mode is enabled and the candidate set is restricted to 29 languages that realistically appear in a Spotify catalog (`en, es, pt, fr, de, it, nl, sv, da, nb, fi, pl, cs, hu, ro, ru, uk, tr, ar, he, hi, bn, id, vi, th, ja, ko, zh, el`). Detection runs on `track_name + " " + artists`. Texts shorter than 4 characters and detections that lingua marks as ambiguous are bucketed as `"unknown"`. The full candidate list lives in [scripts/prepare_dataset.py](../scripts/prepare_dataset.py); it must stay in sync with `KNOWN_LANGUAGES` in [src/prompts.py](../src/prompts.py).
+
+**Why restrict the candidate set:** unrestricted lingua produces false positives into rare languages (Latin, Welsh, Esperanto, Yoruba) when fed short titles. Constraining the candidates makes those false positives physically impossible — the detector cannot return a language outside the set.
+
+**Why detect at prep time, not request time:**
+- Detection is deterministic and reproducible — same input always yields the same `language` column
+- The catalog is filtered O(N) per request (one list comprehension); no per-track LLM/library calls in the hot path
+- Re-running prep is a documented, reproducible step rather than an opaque runtime side effect
+
+---
+
+## Language Filter
+
+A user-facing filter applied **before scoring**. Two paths:
+
+### Path 1 — Auto-detected from prompt
+
+`ANALYZE_SYSTEM_PROMPT` instructs Claude to populate a top-level `languages` field whenever the prompt explicitly references a language, country, region, or culture-coded music style (e.g., "k-pop", "Brazilian funk", "j-pop and city pop", "French chanson"). Genre-only prompts ("upbeat workout music") yield `null`.
+
+When the LLM returns a non-null list, the Streamlit UI skips the menu and `run_with_analysis` filters the catalog using those codes directly.
+
+### Path 2 — User-selected from menu
+
+When ANALYZE returns `languages: null`, the UI renders a multiselect populated from the catalog's actual language counts (only languages with ≥50 tracks are shown, sorted by frequency). Defaults: `["en", "unknown"]` — covers the most common implicit assumption (English) plus the false-negative bucket from short-text detection.
+
+### Filter implementation
+
+In [src/agent.py](../src/agent.py) `run_with_analysis`:
+
+```python
+songs = load_songs(str(DATA_PATH))
+if languages:
+    lang_set = set(languages)
+    songs = [s for s in songs if s.get("language") in lang_set]
 ```
-Calls Claude once to map ~100 common Spotify artist genre tags to `KNOWN_GENRES` values. Output saved to `data/spotify_genre_map.json`. Fallback chain at runtime: JSON map → substring match → default `"pop"`.
+
+The filtered list is what `draft_playlist` and `self_correct` see — replacements during the correction step are drawn from the same language-restricted pool.
 
 ---
 
@@ -141,7 +208,7 @@ genre_match = 0.50 × family_match(song.genre, genre)
 mood_match  = 0.50 × family_match(song.mood, mood)
             + 0.50 × family_match(song.mood, current_mood)
 
-categorical_score = 0.33 × genre_match + 0.67 × mood_match
+categorical_score = 0.50 × genre_match + 0.50 × mood_match
 ```
 
 **Genre families:**
@@ -162,13 +229,13 @@ categorical_score = 0.33 × genre_match + 0.67 × mood_match
 |---|---|
 | melancholic | sad, melancholic, moody, introspective, nostalgic, wistful |
 | calm | chill, relaxed, peaceful, dreamy, focused |
-| energetic | energetic (singleton) |
+| energetic | energetic, euphoric, empowered |
 | intense | intense, angry, anxious |
 | positive | happy, joyful, romantic, hopeful, uplifting |
 
 **Why 50/50 session/long-term split:** Equal weighting prevents one off-genre session from overriding established taste. A prior 70/30 session-heavy split caused a filter bubble.
 
-**Why 0.67 mood weight in categorical:** Mood is the stronger user intent signal for natural language prompts. Genre acts as a constraint; mood describes what the user wants to feel.
+**Why 50/50 genre/mood split in categorical:** Earlier iterations weighted mood at 0.67. After the catalog grew to ~80k tracks, equal weighting produced more diverse top-K results — at scale, mood-dominance pulled too many same-mood/different-genre songs into the top of the score distribution.
 
 ### Step 2 — Numeric Similarity
 
@@ -191,7 +258,7 @@ tempo_sim    = 1 − |tempo_norm        − target_tempo_norm|
 genre_gate = max(
     family_match(song.genre, genre),
     family_match(song.genre, current_genre),
-    0.25    ← floor preserves cross-genre discovery for niche users
+    0.10    ← floor preserves cross-genre discovery for niche users
 )
 
 numeric_score = (0.35 × energy_sim
@@ -207,17 +274,18 @@ numeric_score = (0.35 × energy_sim
 SCORE = 0.40 × categorical_score + 0.60 × numeric_score
 ```
 
-**Max contribution per term:**
+**Max contribution per term** (assuming exact matches everywhere and `genre_gate = 1.0`):
 
 | Term | Max |
 |---|---|
-| Genre | 0.132 |
-| Mood | 0.268 |
+| Genre | 0.200 |
+| Mood | 0.200 |
 | Energy | ≤ 0.210 |
 | Valence | ≤ 0.150 |
 | Danceability | ≤ 0.150 |
 | Acousticness | ≤ 0.060 |
 | Tempo | ≤ 0.030 |
+| **Total** | **1.000** |
 
 ---
 
@@ -234,6 +302,20 @@ effective_score = max(effective_score, 0.0)
 
 Maximum penalty: −0.30 per song. Applied after scoring — does not surface low-scoring songs. Comparison window is depth 1 (only against the immediately preceding pick).
 
+### Heap-based top-K optimization
+
+The variety re-ranker is **O(n²)** — for each output slot it scans the remaining pool. On the original 30-song catalog this was negligible (~900 ops); on the 80k-row catalog it was catastrophic (~6.4 billion ops, multi-minute draft step).
+
+The fix in `recommend_songs` ([recommender.py](../src/recommender.py)):
+
+1. **Score the full catalog** with no string formatting — cheap O(n) pass
+2. **Maintain a min-heap of size `pool_size = max(k * 10, 50)`** during the pass — total cost O(n log pool_size)
+3. **Sort just the surviving pool** descending and attach explanation strings only for those candidates
+4. **Apply variety re-rank** to the pool — bounded O(pool_size²) ≈ 2,500 ops regardless of catalog size
+5. **Take top k**, attach numeric explanations only for the final 5
+
+This keeps the engine sub-100 ms on 80k tracks and scales to millions without further changes. The output is identical to the old "score everything → sort → variety-rank everything" version when there are no score ties; ties are broken by catalog index (deterministic, stable, no dict-comparison errors).
+
 ---
 
 ## LLM Prompt Design
@@ -242,7 +324,11 @@ Two LLM calls use fixed prompt templates in `src/prompts.py`.
 
 **Call 1 — ANALYZE**
 
-System prompt instructs Claude to output a JSON object with `user_prefs`, `emotion_intent`, `reasoning`, and `confidence`. Allowed genres and moods are injected from `KNOWN_GENRES` and `KNOWN_MOODS` at call time. Emotion intent rules define numeric nudges:
+System prompt instructs Claude to output a JSON object with `user_prefs`, `emotion_intent`, `languages`, `reasoning`, and `confidence`. Allowed genres, moods, and languages are injected from `KNOWN_GENRES`, `KNOWN_MOODS`, and `KNOWN_LANGUAGES` at call time (as `sorted(set)` for deterministic prompt-cache keys).
+
+The `languages` field is a list of ISO 639-1 codes drawn from `KNOWN_LANGUAGES`, **only** populated when the prompt explicitly references a language, country, region, or culture-coded music style (k-pop, j-pop, reggaeton, fado, mariachi, etc.). Genre-only prompts return `null`. Invalid codes returned by the LLM are dropped with a `[WARN]` log; an all-invalid list collapses to `null`.
+
+Emotion intent rules define numeric nudges:
 
 | Intent | Effect |
 |---|---|
@@ -298,28 +384,52 @@ All LLM-returned fields are sanitised:
 
 - **Linear similarity.** `1 − |song − target|` is perceptually linear; human perception of musical features is not.
 - **Static weights.** Numeric feature weights are fixed; they do not adapt to individual users or feedback.
-- **Genre gate cliff.** Discrete multipliers (1.0 → 0.5 → 0.25) create step-changes rather than a smooth gradient.
-- **Tempo normalization range.** BPM outside 60–200 produces distorted values. Spotify songs are clamped before scoring.
+- **Genre gate cliff.** Discrete multipliers (1.0 → 0.5 → 0.10) create step-changes rather than a smooth gradient.
+- **Tempo normalization range.** BPM outside 60–200 produces distorted values.
 - **Variety window depth 1.** Penalties only compare to the immediately preceding pick.
 - **Non-deterministic Check step.** The same draft may produce different corrections across runs.
-- **Mood inference is a heuristic.** Valence/energy quadrants do not reliably separate emotional nuance.
+- **Mood derivation is a heuristic.** The 2×3 valence/energy grid does not reliably separate emotional nuance.
+- **Language detection on short text is imperfect.** Lingua misclassifies some titles (especially mixed-language code-switching, kanji-only titles confused for Chinese, romanized non-English songs misclassified as English). The `"unknown"` bucket and the curated 29-language candidate set mitigate but don't eliminate this.
+- **Romanization defeats detection.** Romanized K-pop ("Dynamite", "Gangnam Style") classifies as `en`. A user filtering for Korean would miss these. Fixing this would require lyrics or audio-language detection.
+- **Frozen catalog.** The Maharshipandya dataset is a pre-deprecation snapshot. New releases since 2024 are not present. Refreshing would require sourcing post-deprecation audio features from a different provider.
 - **No user feedback loop.** The system cannot improve with use.
 
 ---
 
 ## File Reference
 
+### Source
+
 | File | Role |
 |---|---|
-| `src/recommender.py` | Rule engine: scoring, variety re-ranker, `load_songs()`, `recommend_songs()` |
-| `src/agent.py` | Agentic pipeline: `analyze_prompt()`, `draft_playlist()`, `self_correct()`, `run_agent()` |
-| `src/prompts.py` | LLM templates, `KNOWN_GENRES`, `KNOWN_MOODS` |
-| `src/spotify_client.py` | Spotify fetch: `fetch_spotify_songs()`, `_infer_mood()` |
-| `src/spotify_utils.py` | Genre translation: `translate_spotify_genres()` |
-| `src/app.py` | Streamlit web UI (MoodSync) |
+| `src/recommender.py` | Rule engine: scoring, heap-based top-K, variety re-ranker, `load_songs()`, `recommend_songs()` |
+| `src/agent.py` | Agentic pipeline: `analyze_prompt()`, `analyze_only()`, `draft_playlist()`, `self_correct()`, `run_with_analysis()`, `run_agent()`, `refresh_playlist()` |
+| `src/prompts.py` | LLM templates and vocabularies as sets: `KNOWN_GENRES`, `KNOWN_MOODS`, `KNOWN_LANGUAGES` |
+| `src/spotify_utils.py` | Legacy genre-tag translator (no longer on the hot path; preserved for potential future Spotify-API integration) |
+| `src/app.py` | Streamlit web UI (MoodSync), two-phase analyze→(menu)→draft state machine |
 | `src/main.py` | CLI demo with hardcoded profiles |
-| `data/songs.csv` | 301-song default catalog |
-| `data/spotify_genre_map.json` | Spotify → KNOWN_GENRES mapping (generated by script) |
-| `scripts/generate_genre_map.py` | One-time Claude call to generate `spotify_genre_map.json` |
-| `tests/test_recommender.py` | Unit tests for scoring engine (8 tests) |
+
+### Data
+
+| File | Role |
+|---|---|
+| `data/dataset.csv` | Raw Maharshipandya dataset (113,999 rows, input to prep) |
+| `data/songs_full.csv` | Production catalog (80,393 rows) — output of `prepare_dataset.py` |
+| `data/songs.csv` | Hand-labeled fixture (~30 rows) — used by tests only |
+| `data/dataset_genre_map.json` | Maps the dataset's 114 genre tags to `KNOWN_GENRES` (output of `build_dataset_genre_map.py`) |
+| `data/spotify_genre_map.json` | Legacy artifact from earlier Spotify-API exploration; no longer used |
+
+### Scripts
+
+| File | Role |
+|---|---|
+| `scripts/build_dataset_genre_map.py` | One-time Claude call to map dataset genres → `KNOWN_GENRES` |
+| `scripts/prepare_dataset.py` | Pandas + lingua transformation: filter, dedupe, derive mood, detect language, write `songs_full.csv` |
+| `scripts/generate_genre_map.py` | Legacy script for the earlier Spotify-API integration |
+
+### Tests
+
+| File | Role |
+|---|---|
+| `tests/test_recommender.py` | Unit tests for scoring engine |
 | `tests/test_agent.py` | Mocked tests for agentic pipeline |

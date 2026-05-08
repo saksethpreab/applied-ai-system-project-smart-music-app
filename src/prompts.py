@@ -7,7 +7,7 @@ These constants are consumed by src/agent.py. No logic lives here.
 
 # ── Valid vocabulary (must match recommender.py GENRE_FAMILIES / MOOD_FAMILIES) ─
 
-KNOWN_GENRES = [
+KNOWN_GENRES = {
     # pop family
     "pop", "indie pop", "disco", "latin", "reggae", "ballad", "k-pop",
     # electronic family
@@ -22,9 +22,9 @@ KNOWN_GENRES = [
     "jazz", "blues", "classical", "country", "gospel", "bossa nova", "hymn", "spiritual", "worship",
     # world family
     "afrobeats", "flamenco", "celtic",
-]
+}
 
-KNOWN_MOODS = [
+KNOWN_MOODS = {
     # positive
     "happy", "joyful", "romantic", "hopeful", "uplifting",
     # melancholic
@@ -35,7 +35,16 @@ KNOWN_MOODS = [
     "energetic", "euphoric", "empowered",
     # intense
     "intense", "angry", "anxious",
-]
+}
+
+# Languages present in the catalog (must match scripts/prepare_dataset.py
+# _CANDIDATE_LANGUAGES, plus "unknown" for tracks that couldn't be classified).
+KNOWN_LANGUAGES = {
+    "en", "es", "pt", "fr", "de", "it", "nl", "sv",
+    "da", "nb", "fi", "pl", "cs", "hu", "ro", "ru",
+    "uk", "tr", "ar", "he", "hi", "bn", "id", "vi",
+    "th", "ja", "ko", "zh", "el", "unknown",
+}
 
 # ── ANALYZE prompts (LLM Call #1) ───────────────────────────────────────────────
 
@@ -61,6 +70,7 @@ Required JSON schema:
     "target_tempo":        <float 50.0-200.0>
   }},
   "emotion_intent": "<match|uplift|energize|calm|contrast>",
+  "languages":     <list of ISO-639-1 codes, or null>,
   "reasoning": "<1-2 sentence explanation of your choices>",
   "confidence": <float 0.0-1.0>
 }}
@@ -89,6 +99,25 @@ Allowed genre values (use ONLY these):
 
 Allowed mood values (use ONLY these):
 {moods}
+
+Allowed language codes (use ONLY these for the "languages" field):
+{languages}
+
+Language detection rules — populate "languages" ONLY when the prompt
+explicitly mentions a language, country, region, or culture-coded music
+style that strongly implies a language:
+  "k-pop bangers"              -> ["ko"]
+  "Brazilian funk"             -> ["pt"]
+  "j-pop and city pop"         -> ["ja"]
+  "Spanish reggaeton"          -> ["es"]
+  "French chanson"             -> ["fr"]
+  "Korean and Japanese tracks" -> ["ko", "ja"]
+
+Set "languages" to null when the prompt makes no language reference
+(e.g., "upbeat workout music", "sad songs for a rainy night"). Do NOT
+infer language from a genre alone unless the genre is strongly
+region-coded (k-pop, j-pop, reggaeton, fado, chanson, mariachi, etc.).
+English-dominant genres (pop, rock, hip-hop, r&b, electronic) -> null.
 
 Emotion intent rules — determine intent first, then set numeric targets:
 

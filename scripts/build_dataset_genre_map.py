@@ -51,7 +51,7 @@ def main() -> None:
     user_message = (
         f"Dataset genre tags to map:\n{json.dumps(dataset_genres, indent=2)}\n\n"
         f"Allowed vocabulary (map to exactly one of these):\n"
-        f"{json.dumps(KNOWN_GENRES, indent=2)}"
+        f"{json.dumps(sorted(KNOWN_GENRES), indent=2)}"
     )
 
     print(f"Calling Claude ({MODEL}) to generate genre map...")

@@ -1,7 +1,7 @@
 # Visualization Instructions for MoodSync Scoring Formula
 
 ## Overview
-Generate interactive visualizations that show how the music recommendation scoring formula calculates a recommendation score. These visualizations apply regardless of the data source — the same formula is used whether songs come from the default 35-song CSV catalog or a live Spotify candidate pool.
+Generate interactive visualizations that show how the music recommendation scoring formula calculates a recommendation score. The same formula applies regardless of which catalog file is loaded — production runs against the 80,393-row `data/songs_full.csv`, tests run against the small `data/songs.csv` fixture.
 
 Focus on showing:
 1. Component interactions (categorical vs. numeric features)
@@ -9,7 +9,9 @@ Focus on showing:
 3. Step-by-step calculation flow
 4. Sensitivity analysis (how changes in inputs affect output)
 
-**Data source note:** Sample data below uses songs from `data/songs.csv`. When Spotify integration is active, the same formula and visualization logic applies — substitute Spotify-sourced song dicts (same schema) for CSV rows.
+**Pipeline note:** Before scoring, the catalog is filtered by language (either auto-detected from the prompt or chosen via the Streamlit menu). Visualizations of scoring assume that filter has already been applied — they operate on the post-filter song pool.
+
+**Data source note:** Examples below reference `data/songs.csv` (the hand-labeled fixture) for compactness. The same schema applies to `data/songs_full.csv`, plus `track_id`, `popularity`, and `language` columns.
 
 ---
 
@@ -22,12 +24,16 @@ A simple flowchart tracing the full journey from user input to ranked playlist o
 
 ```mermaid
 flowchart TD
-    A([User Prompt\ngenre · mood · energy · valence\ndanceability · acousticness · tempo]) --> B[Load Song Catalog\nCSV or Spotify candidates]
+    A([User Prompt\nnatural language]) --> A1[ANALYZE — LLM #1\nextract genre, mood, numeric targets,\nemotion_intent, languages]
 
-    B --> C{For each song}
+    A1 --> A2{languages\ndetected?}
+    A2 -- yes --> B
+    A2 -- no --> A3[UI menu — user picks languages\ndefault: en + unknown] --> B
 
-    C --> D[Categorical Score\ngenre_match · mood_match\nweighted 0.33 / 0.67]
-    C --> E[Genre Gate\n1.00 exact · 0.50 family · 0.25 foreign]
+    B[Load songs_full.csv\nfilter by selected languages] --> C{For each song}
+
+    C --> D[Categorical Score\ngenre_match · mood_match\nweighted 0.50 / 0.50]
+    C --> E[Genre Gate\n1.00 exact · 0.50 family · 0.10 foreign]
     C --> F[Numeric Score\nenergy · valence · danceability\nacousticness · tempo\nweights: 0.35 · 0.25 · 0.25 · 0.10 · 0.05]
 
     E --> F
@@ -35,13 +41,17 @@ flowchart TD
     D --> G[Final Score\n0.40 × Categorical + 0.60 × Numeric]
     F --> G
 
-    G --> H[Sort all songs\nby raw score descending]
+    G --> H[Heap-based top-50\nO\(n log 50\) single pass]
 
     H --> I[Apply Variety Penalties\n−0.15 repeat genre\n−0.15 repeat mood\nmax penalty −0.30]
 
-    I --> J[Select Top-N Songs\nby effective score]
+    I --> J[Select Top-5 Songs\nby effective score]
 
-    J --> K([Ranked Playlist Output\nTitle · Artist · Score · Genre · Mood])
+    J --> K([Draft playlist])
+
+    K --> L[CHECK — LLM #2\nself_correct: evaluate fit, replace mismatches]
+
+    L --> M([Final Playlist\nTitle · Artist · Score · Genre · Mood])
 ```
 
 ---
@@ -75,9 +85,9 @@ match    match    weight   weight   weight  weight    weight
 
 ### Key Elements to Show
 - Node hierarchy with labels
-- Weight percentages at each branch (0.40 and 0.60 split)
+- Weight percentages at each branch (0.40 and 0.60 split; 0.50 / 0.50 within categorical)
 - Further breakdown of numeric_score into 5 features with their weights
-- genre_gate multiplier (1.00 / 0.50 / 0.25) applied to entire numeric score block
+- genre_gate multiplier (1.00 / 0.50 / 0.10) applied to entire numeric score block
 - Color coding: Categorical (blue), Numeric (green)
 
 ---
@@ -96,7 +106,7 @@ For a sample calculation, show:
 5. **Acousticness contribution** = 0.60 × 0.10 × genre_gate × acousticness_sim = 0.06 × genre_gate × acousticness_sim
 6. **Tempo contribution** = 0.60 × 0.05 × genre_gate × tempo_sim = 0.03 × genre_gate × tempo_sim
 
-Note: genre_gate ∈ {1.00, 0.50, 0.25} — exact genre match / same family / foreign. All numeric terms are scaled together by this multiplier.
+Note: genre_gate ∈ {1.00, 0.50, 0.10} — exact genre match / same family / foreign (with floor). All numeric terms are scaled together by this multiplier.
 
 ### Chart Type
 Stacked horizontal bar showing cumulative contributions to final score (0 to 1).
@@ -312,10 +322,10 @@ Use this user profile and songs for consistent examples:
 **Step 1: Categorical Score**
 - genre_match = 0.50 × family_match(pop, pop) + 0.50 × family_match(pop, pop) = 0.50(1.0) + 0.50(1.0) = **1.0**
 - mood_match  = 0.50 × family_match(happy, happy) + 0.50 × family_match(happy, happy) = 0.50(1.0) + 0.50(1.0) = **1.0**
-- categorical_score = 0.33 × 1.0 + 0.67 × 1.0 = **1.0**
+- categorical_score = 0.50 × 1.0 + 0.50 × 1.0 = **1.0**
 
 **Step 2: Genre Gate**
-- genre_gate = max(family_match(pop, pop), family_match(pop, pop), 0.25) = max(1.0, 1.0, 0.25) = **1.0**
+- genre_gate = max(family_match(pop, pop), family_match(pop, pop), 0.10) = max(1.0, 1.0, 0.10) = **1.0**
 
 **Step 3: Numeric Features**
 - energy_sim      = 1 - |0.82 - 0.85| = **0.97**

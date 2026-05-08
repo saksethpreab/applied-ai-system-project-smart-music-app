@@ -45,6 +45,7 @@ def _make_analyze_response(
     genre="lofi", mood="chill", current_genre="lofi", current_mood="chill",
     energy=0.25, valence=0.50, dance=0.35, acoustic=0.80, tempo=85.0,
     reasoning="Chill studying vibes.", confidence=0.88,
+    languages=None,
 ):
     payload = {
         "user_prefs": {
@@ -60,6 +61,7 @@ def _make_analyze_response(
         },
         "reasoning":  reasoning,
         "confidence": confidence,
+        "languages":  languages,
     }
     msg = MagicMock()
     msg.content = [MagicMock(text=json.dumps(payload))]
@@ -87,7 +89,7 @@ class TestAnalyzePrompt:
         """LLM returns valid JSON — result must contain all 9 required user_prefs keys,
         a non-empty reasoning string, and a confidence value in [0.0, 1.0]."""
         mock_client.messages.create.return_value = _make_analyze_response()
-        prefs, reasoning, confidence, _ = analyze_prompt("chill studying music", mock_client)
+        prefs, reasoning, confidence, _, _ = analyze_prompt("chill studying music", mock_client)
 
         assert set(prefs.keys()) == {
             "genre", "mood", "current_genre", "current_mood",
@@ -104,7 +106,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             energy=0.25, valence=0.50, dance=0.35, acoustic=0.80, tempo=85.0
         )
-        prefs, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         for key in ("target_energy", "target_valence", "target_danceability", "target_acousticness"):
             assert 0.0 <= prefs[key] <= 1.0, f"{key} out of range"
@@ -117,7 +119,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             energy=1.9, tempo=300.0
         )
-        prefs, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         assert prefs["target_energy"] == 1.0
         assert prefs["target_tempo"] == 200.0
@@ -129,7 +131,7 @@ class TestAnalyzePrompt:
         mock_client.messages.create.return_value = _make_analyze_response(
             genre="chillwave", current_genre="chillwave"
         )
-        prefs, _, _, _ = analyze_prompt("any prompt", mock_client)
+        prefs, _, _, _, _ = analyze_prompt("any prompt", mock_client)
 
         from prompts import KNOWN_GENRES
         assert prefs["genre"] in KNOWN_GENRES
@@ -145,7 +147,7 @@ class TestAnalyzePrompt:
         good_msg = _make_analyze_response()
 
         mock_client.messages.create.side_effect = [bad_msg, good_msg]
-        prefs, reasoning, confidence, _ = analyze_prompt("any prompt", mock_client)
+        prefs, reasoning, confidence, _, _ = analyze_prompt("any prompt", mock_client)
 
         assert confidence == 0.88
 
@@ -158,7 +160,7 @@ class TestAnalyzePrompt:
         bad_msg.usage   = MagicMock(output_tokens=5)
 
         mock_client.messages.create.side_effect = [bad_msg, bad_msg]
-        prefs, _, confidence, _ = analyze_prompt("???", mock_client)
+        prefs, _, confidence, _, _ = analyze_prompt("???", mock_client)
 
         assert confidence == 0.0
         assert prefs["genre"] == _ANALYZE_FALLBACK_PREFS["genre"]

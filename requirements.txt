@@ -4,3 +4,4 @@ streamlit
 anthropic
 python-dotenv
 plotly
+lingua-language-detector
