@@ -3,6 +3,7 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -12,6 +13,13 @@ import pandas as pd
 from agent import analyze_only, run_with_analysis, DATA_PATH
 from prompts import KNOWN_LANGUAGES
 from recommender import load_songs
+
+
+def _spotify_url(song: dict) -> str:
+    if song.get("track_id"):
+        return f"https://open.spotify.com/track/{song['track_id']}"
+    query = quote(f"{song['title']} {song['artist']}")
+    return f"https://open.spotify.com/search/{query}"
 
 logger = logging.getLogger(__name__)
 _MAX_REQUESTS_PER_MINUTE = 10
@@ -228,13 +236,18 @@ if st.session_state["result"] is not None:
     st.subheader("Your Playlist")
     for i, song in enumerate(result["final_playlist"], 1):
         with st.container():
-            col_num, col_main, col_score = st.columns([0.5, 6, 1.5])
+            col_num, col_main, col_score, col_link = st.columns([0.5, 5.5, 1.2, 1.3])
             col_num.markdown(f"**{i}.**")
             col_main.markdown(f"**{song['title']}** — {song['artist']}")
             col_main.caption(
                 f"{song['genre'].title()} · {song['mood'].title()} · {song['tempo_bpm']:.0f} BPM"
             )
             col_score.metric(label="Score", value=f"{song['score']:.3f}")
+            col_link.link_button(
+                "Open in Spotify",
+                _spotify_url(song),
+                use_container_width=True,
+            )
             with st.expander("Why this song?"):
                 st.write(song["explanation"])
                 if song.get("explanation_numeric"):
@@ -358,22 +371,24 @@ if st.session_state["result"] is not None:
         with comp_col1:
             st.markdown("**Draft Playlist**")
             for song in draft:
+                url = _spotify_url(song)
                 if song["id"] in removed_ids:
                     st.markdown(
-                        f":red[Removed] ~~{song['title']}~~ — {song['artist']} `{song['score']:.3f}`"
+                        f":red[Removed] ~~[{song['title']}]({url})~~ — {song['artist']} `{song['score']:.3f}`"
                     )
                 else:
-                    st.markdown(f"{song['title']} — {song['artist']} `{song['score']:.3f}`")
+                    st.markdown(f"[{song['title']}]({url}) — {song['artist']} `{song['score']:.3f}`")
 
         with comp_col2:
             st.markdown("**Final Playlist**")
             for song in final:
+                url = _spotify_url(song)
                 if song["id"] in added_ids:
                     st.markdown(
-                        f":green[New] **{song['title']}** — {song['artist']} `{song['score']:.3f}`"
+                        f":green[New] **[{song['title']}]({url})** — {song['artist']} `{song['score']:.3f}`"
                     )
                 else:
-                    st.markdown(f"{song['title']} — {song['artist']} `{song['score']:.3f}`")
+                    st.markdown(f"[{song['title']}]({url}) — {song['artist']} `{song['score']:.3f}`")
 
     # Footer
     st.caption(f'Prompt: "{st.session_state["last_prompt"]}"')

@@ -78,6 +78,7 @@ class Song:
     valence: float
     danceability: float
     acousticness: float
+    track_id: str = ""
 
 
 @dataclass
@@ -247,7 +248,7 @@ class Recommender:
         """Return top k songs recommended for the user."""
         song_map = {s.id: s for s in self.songs}
         as_dicts = sorted(
-            [({"id": s.id, "genre": s.genre, "mood": s.mood}, _score_song(s, user), "")
+            [({"id": s.id, "genre": s.genre, "mood": s.mood, "track_id": s.track_id}, _score_song(s, user), "")
              for s in self.songs],
             key=lambda x: x[1], reverse=True,
         )
@@ -296,6 +297,7 @@ def load_songs(csv_path: str) -> List[Dict]:
                 "danceability": float(row["danceability"]),
                 "acousticness": float(row["acousticness"]),
                 "language":     row.get("language"),
+                "track_id":     row.get("track_id", ""),
             })
     return songs
 

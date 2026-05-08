@@ -87,63 +87,63 @@ class TestValidateAnalyzeOutput:
             "target_tempo": 128.0,
         }
 
-    def test_valid_prefs_produce_no_security_log(self, capsys):
+    def test_valid_prefs_produce_no_security_log(self, caplog):
         """A fully valid preference dict must produce no [SECURITY] log lines."""
-        _validate_analyze_output(self._valid_prefs(), "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" not in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(self._valid_prefs(), "match")
+        assert "[SECURITY]" not in caplog.text
 
-    def test_unknown_genre_logs_security_warning(self, capsys):
+    def test_unknown_genre_logs_security_warning(self, caplog):
         """A genre value not in KNOWN_GENRES must trigger a [SECURITY] log line."""
         prefs = self._valid_prefs()
         prefs["genre"] = "made_up_genre_xyz"
-        _validate_analyze_output(prefs, "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "genre" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(prefs, "match")
+        assert "[SECURITY]" in caplog.text
+        assert "genre" in caplog.text
 
-    def test_unknown_mood_logs_security_warning(self, capsys):
+    def test_unknown_mood_logs_security_warning(self, caplog):
         """A mood value not in KNOWN_MOODS must trigger a [SECURITY] log line."""
         prefs = self._valid_prefs()
         prefs["mood"] = "totally_unknown_mood"
-        _validate_analyze_output(prefs, "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "mood" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(prefs, "match")
+        assert "[SECURITY]" in caplog.text
+        assert "mood" in caplog.text
 
-    def test_energy_above_one_logs_security_warning(self, capsys):
+    def test_energy_above_one_logs_security_warning(self, caplog):
         """A target_energy above 1.0 must trigger a [SECURITY] log line, since
         clamping should have already corrected it."""
         prefs = self._valid_prefs()
         prefs["target_energy"] = 1.5
-        _validate_analyze_output(prefs, "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "target_energy" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(prefs, "match")
+        assert "[SECURITY]" in caplog.text
+        assert "target_energy" in caplog.text
 
-    def test_energy_below_zero_logs_security_warning(self, capsys):
+    def test_energy_below_zero_logs_security_warning(self, caplog):
         """A target_energy below 0.0 must trigger a [SECURITY] log line."""
         prefs = self._valid_prefs()
         prefs["target_energy"] = -0.1
-        _validate_analyze_output(prefs, "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(prefs, "match")
+        assert "[SECURITY]" in caplog.text
 
-    def test_tempo_out_of_range_logs_security_warning(self, capsys):
+    def test_tempo_out_of_range_logs_security_warning(self, caplog):
         """A target_tempo outside [50.0, 200.0] must trigger a [SECURITY] log line."""
         prefs = self._valid_prefs()
         prefs["target_tempo"] = 300.0
-        _validate_analyze_output(prefs, "match")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "target_tempo" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(prefs, "match")
+        assert "[SECURITY]" in caplog.text
+        assert "target_tempo" in caplog.text
 
-    def test_invalid_emotion_intent_logs_security_warning(self, capsys):
+    def test_invalid_emotion_intent_logs_security_warning(self, caplog):
         """An emotion_intent not in VALID_INTENTS must trigger a [SECURITY] log line."""
-        _validate_analyze_output(self._valid_prefs(), "malicious_intent")
-        captured = capsys.readouterr()
-        assert "[SECURITY]" in captured.out
-        assert "emotion_intent" in captured.out
+        with caplog.at_level("WARNING", logger="agent"):
+            _validate_analyze_output(self._valid_prefs(), "malicious_intent")
+        assert "[SECURITY]" in caplog.text
+        assert "emotion_intent" in caplog.text
 
     def test_does_not_raise_on_invalid_input(self):
         """_validate_analyze_output must never raise — it logs only. The caller

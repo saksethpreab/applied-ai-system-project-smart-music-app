@@ -389,28 +389,32 @@ class TestRunAgent:
         ]
 
     def test_returns_full_result_dict(self):
-        """The top-level orchestrator must return a dict containing all five
-        expected top-level keys: user_prompt, analysis, draft_playlist,
-        final_playlist, and metrics."""
+        """The top-level orchestrator must return a dict containing all expected
+        top-level keys: user_prompt, analysis, draft_playlist, final_playlist,
+        metrics, and recommended_ids."""
         with patch("agent._build_client") as mock_build:
             mock_client = MagicMock()
             self._setup_mocks(mock_build, mock_client, None)
             result = run_agent("chill studying music")
 
         assert set(result.keys()) == {
-            "user_prompt", "analysis", "draft_playlist", "final_playlist", "metrics"
+            "user_prompt", "analysis", "draft_playlist",
+            "final_playlist", "metrics", "recommended_ids",
         }
 
     def test_analysis_structure(self):
-        """The 'analysis' section of the result must contain exactly three keys:
-        user_prefs (the structured profile), reasoning (LLM explanation), and
-        confidence (float)."""
+        """The 'analysis' section of the result must contain the structured profile
+        (user_prefs), LLM explanation (reasoning), confidence, plus the emotion
+        intent and language metadata used by the UI."""
         with patch("agent._build_client") as mock_build:
             mock_client = MagicMock()
             self._setup_mocks(mock_build, mock_client, None)
             result = run_agent("chill studying music")
 
-        assert set(result["analysis"].keys()) == {"user_prefs", "reasoning", "confidence"}
+        assert set(result["analysis"].keys()) == {
+            "user_prefs", "reasoning", "confidence",
+            "emotion_intent", "detected_languages", "applied_languages",
+        }
 
     def test_metrics_structure_and_types(self):
         """All four metric values must be present and have the correct Python types:

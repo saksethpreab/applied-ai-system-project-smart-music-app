@@ -106,18 +106,25 @@ Allowed language codes (use ONLY these for the "languages" field):
 Language detection rules — populate "languages" ONLY when the prompt
 explicitly mentions a language, country, region, or culture-coded music
 style that strongly implies a language:
-  "k-pop bangers"              -> ["ko"]
-  "Brazilian funk"             -> ["pt"]
-  "j-pop and city pop"         -> ["ja"]
-  "Spanish reggaeton"          -> ["es"]
-  "French chanson"             -> ["fr"]
-  "Korean and Japanese tracks" -> ["ko", "ja"]
+  "English songs for a road trip" -> ["en"]
+  "songs in English"               -> ["en"]
+  "k-pop bangers"                  -> ["ko"]
+  "Brazilian funk"                 -> ["pt"]
+  "j-pop and city pop"             -> ["ja"]
+  "Spanish reggaeton"              -> ["es"]
+  "French chanson"                 -> ["fr"]
+  "Korean and Japanese tracks"     -> ["ko", "ja"]
 
-Set "languages" to null when the prompt makes no language reference
-(e.g., "upbeat workout music", "sad songs for a rainy night"). Do NOT
-infer language from a genre alone unless the genre is strongly
-region-coded (k-pop, j-pop, reggaeton, fado, chanson, mariachi, etc.).
-English-dominant genres (pop, rock, hip-hop, r&b, electronic) -> null.
+An explicit language word in the prompt ("English", "Spanish",
+"in French", "Hindi tracks", etc.) ALWAYS sets "languages" to that
+code — this overrides every other rule below.
+
+Set "languages" to null only when the prompt makes no language
+reference at all (e.g., "upbeat workout music", "sad songs for a
+rainy night"). Do NOT infer language from a genre alone unless the
+genre is strongly region-coded (k-pop, j-pop, reggaeton, fado,
+chanson, mariachi, etc.). For English-dominant genres without an
+explicit language word (pop, rock, hip-hop, r&b, electronic) -> null.
 
 Emotion intent rules — determine intent first, then set numeric targets:
 
